@@ -1,0 +1,61 @@
+# GitHub Pages デプロイ用ワークフロー
+#
+# 目的:
+#   本リポジトリは HTML / CSS / JavaScript のみで構成された静的サイト
+#   （Langevin & Score Lab）であり、ビルド工程を持たない。
+#   そのためリポジトリのルートをそのまま Pages の成果物として公開する。
+#
+# 前提:
+#   リポジトリの Settings → Pages → Build and deployment → Source が
+#   "GitHub Actions" に設定されていること。ブランチ配信 (Deploy from a branch)
+#   のままだと、deploy-pages ステップが Pages サイト未作成エラーで失敗する。
+#
+# 公開URL:
+#   Project Pages のため https://<username>.github.io/<repository-name>/ 配下に
+#   サブパス配信される。index.html の参照はすべて相対パスなので追加設定は不要。
+
+name: Deploy to GitHub Pages
+
+on:
+  # main への push を唯一のリリーストリガーとする。
+  push:
+    branches: [main]
+  # 設定変更後などにコード変更なしで再デプロイできるよう手動実行も許可する。
+  workflow_dispatch:
+
+# デプロイに必要な最小権限のみを付与する。
+permissions:
+  contents: read # リポジトリの checkout 用
+  pages: write # Pages サイトへのデプロイ用
+  id-token: write # deploy-pages が使う OIDC トークンの発行用
+
+# 同時実行を1本に制限する。cancel-in-progress を false にしているのは、
+# 進行中のデプロイを中断すると Pages が中途半端な状態で残り得るため。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload repository root as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # ルート直下の index.html を配信する。
+          # このアクションは .git と .github を自動的に除外するため、
+          # path: . を指定しても内部ファイルは公開されない。
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
