@@ -39,10 +39,10 @@ python3 -m http.server 8000
 3. Build and deployment の Source を **GitHub Actions** に設定します。
 4. `main` ブランチへpushするとPages workflowが実行されます。
 
-通常の公開URLは次の形式です。
+公開URLは次のとおりです。
 
 ```text
-https://<username>.github.io/<repository-name>/
+https://ryukih.github.io/machine-learning/
 ```
 
 ## Educational notes
