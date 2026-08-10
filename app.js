@@ -69,16 +69,12 @@
   const SIMULATION = Object.freeze({
     /** 前進積分の時間刻み Δt [モデル時間単位] */
     timeStep: 0.012,
-    /** forward を停止する時刻 [モデル時間単位] */
-    maxTime: 4.2,
     /**
      * score場スナップショットを記録する間隔 [前進ステップ数]。
      * reverse の1ステップはこの間隔ぶんの時間を一気に戻すため、
      * reverse側の時間刻みもこの値から導出する（両者は必ず一致する必要がある）。
      */
     stepsPerSnapshot: 4,
-    /** 履歴リングバッファの上限 [スナップショット数]。メモリ暴走の保険。 */
-    maxSnapshots: 260,
     /** Reverse を許可するために最低限必要なスナップショット数 */
     minSnapshotsToReverse: 8,
     /** Reverse を許可するために最低限必要な経過時刻 [モデル時間単位] */
@@ -127,14 +123,30 @@
   /**
    * レッスンごとの初期粒子配置。
    * standardDeviation / modeOffset はいずれもモデル長さ単位 [L]。
+   *
+   * 二峰配置が2種類あるのは、レッスン4とレッスン5で求めるものが逆だからである。
+   * 等重み2峰Gaussian混合が単峰化する条件は「半間隔 modeOffset ≤ 峰の幅」であり、
+   * 時刻 t での峰の幅は √(standardDeviation² + σ²t) で与えられる。
+   *   - レッスン4(score) は、終了時刻まで二峰が残っていないと
+   *     「位置によって score の向きが切り替わる」という主題が成り立たない。
+   *   - レッスン5(Reverse) は逆に、forward で確実に単峰まで潰れてくれないと
+   *     「score が構造を復元する」という主題が弱くなる。
    */
   const INITIAL_DISTRIBUTIONS = Object.freeze({
     /** ほぼ一点に集中（デルタ関数の近似） */
     point: Object.freeze({ kind: "gaussian", standardDeviation: 0.10 }),
     /** 広く散らばった単峰分布 */
     wide: Object.freeze({ kind: "gaussian", standardDeviation: 2.7 }),
-    /** 二峰分布。score の向きが位置によって切り替わる様子を見せるために使う。 */
-    mixture: Object.freeze({ kind: "bimodal", modeOffset: 2.25, standardDeviation: 0.42 }),
+    /**
+     * レッスン4用の二峰配置。峰を十分に離し、終了時刻 t=4.2（σ=0.72）でも
+     * 半間隔2.25 > 峰の幅1.53 を保って二峰性が残るようにしてある。
+     */
+    separatedModes: Object.freeze({ kind: "bimodal", modeOffset: 2.25, standardDeviation: 0.42 }),
+    /**
+     * レッスン5用の二峰配置。終了時刻 t=6.0（σ=0.92）で
+     * 半間隔1.95 < 峰の幅2.29 となり、単峰へ潰れきる。
+     */
+    mergingModes: Object.freeze({ kind: "bimodal", modeOffset: 1.95, standardDeviation: 0.42 }),
   });
 
   /**
@@ -270,8 +282,13 @@
   // ===========================================================================
   // レッスン定義
   //
-  // 各レッスンが drift / noise の初期値と表示フラグを持つ。ここがスライダー
-  // 初期値の唯一の情報源であり、起動時にも applyLesson() 経由で適用される。
+  // 各レッスンが drift / noise の初期値、初期配置、終了時刻、表示フラグを持つ。
+  // ここがスライダー初期値の唯一の情報源であり、起動時にも applyLesson() 経由で
+  // 適用される。
+  //
+  // maxTime をレッスンごとに持たせているのは、レッスンによって「どこまで拡散
+  // させたいか」が異なるためである。レッスン4は二峰性を保ったまま終わらせたい
+  // ので短く、レッスン5は単峰まで潰しきりたいので長くとる。
   // ===========================================================================
 
   const lessons = Object.freeze([
@@ -283,6 +300,7 @@
       driftStrength: 0,
       noiseAmplitude: 0.85,
       initialDistribution: "point",
+      maxTime: 4.2,
       showDensity: false,
       showScore: false,
       showDriftField: false,
@@ -296,6 +314,7 @@
       driftStrength: 0.65,
       noiseAmplitude: 0.7,
       initialDistribution: "wide",
+      maxTime: 4.2,
       showDensity: false,
       showScore: false,
       showDriftField: true,
@@ -309,6 +328,7 @@
       driftStrength: 0,
       noiseAmplitude: 0.85,
       initialDistribution: "point",
+      maxTime: 4.2,
       showDensity: true,
       showScore: false,
       showDriftField: false,
@@ -321,7 +341,8 @@
       idea: "同じ位置 x にいる粒子には、同じ score sₜ(x) が作用します。",
       driftStrength: 0,
       noiseAmplitude: 0.72,
-      initialDistribution: "mixture",
+      initialDistribution: "separatedModes",
+      maxTime: 4.2,
       showDensity: true,
       showScore: true,
       showDriftField: false,
@@ -330,17 +351,39 @@
     {
       short: "Reverse",
       subtitle: "scoreで戻す",
-      text: "まずForwardで十分に拡散させます。次にReverseを押すと、<strong>forward時に集団から得たscore</strong>を使って粒子を高密度側へ戻します。軌跡の逆再生ではありません。",
+      text: "まずForwardで拡散させ、二峰構造が完全に潰れるまで進めます。止まったら<strong>「⇠ score で戻す」</strong>を押すと、<strong>forward時に集団から得たscore</strong>を使って粒子を高密度側へ戻します。軌跡の逆再生ではありません。",
       idea: "Reverse diffusion は『元の粒子を覚える』のではなく、時刻ごとの score を使う。",
       driftStrength: 0,
-      noiseAmplitude: 0.78,
-      initialDistribution: "mixture",
+      // σ と maxTime を他レッスンより大きくしてあるのは、forward で二峰構造を
+      // 確実に潰しきるため。ここが単峰まで崩れていないと、reverse が構造を
+      // 復元して見せる意味が薄れる。
+      noiseAmplitude: 0.92,
+      initialDistribution: "mergingModes",
+      maxTime: 6.0,
       showDensity: true,
       showScore: true,
       showDriftField: false,
       allowReverse: true,
     },
   ]);
+
+  /**
+   * score場スナップショット履歴の上限 [スナップショット数]。
+   *
+   * 固定値にしてはいけない。この上限を超えると recordSnapshot() が最も古い
+   * スナップショットから捨てていくため、reverse が初期分布まで戻れなくなる。
+   * しかも reverseStep() は historyCursor が 0 に達した時点で state.time = 0 と
+   * 表示だけ書き換えて打ち切るので、UI上は「t=0 まで戻った」ように見えたまま
+   * 分布が復元されないという分かりにくい壊れ方をする。
+   *
+   * そこで、最も長いレッスンが必要とする枚数から導出する。+2 は初期記録
+   * （resetSimulation 時の force 記録）と端数ステップぶんの余裕。
+   */
+  const MAX_SNAPSHOTS = (() => {
+    const snapshotInterval = SIMULATION.timeStep * SIMULATION.stepsPerSnapshot;
+    const longestMaxTime = Math.max(...lessons.map((lesson) => lesson.maxTime));
+    return Math.ceil(longestMaxTime / snapshotInterval) + 2;
+  })();
 
   // ===========================================================================
   // DOM参照とCanvasの初期化
@@ -354,9 +397,8 @@
   const logicalHeight = canvas.height;
 
   const ui = {
-    play: document.getElementById("playBtn"),
+    primary: document.getElementById("primaryBtn"),
     reset: document.getElementById("resetBtn"),
-    reverse: document.getElementById("reverseBtn"),
     direction: document.getElementById("directionStatus"),
     time: document.getElementById("timeValue"),
     particleSlider: document.getElementById("particleSlider"),
@@ -683,7 +725,7 @@
     });
     state.stepsSinceSnapshot = 0;
 
-    if (state.history.length > SIMULATION.maxSnapshots) state.history.shift();
+    if (state.history.length > MAX_SNAPSHOTS) state.history.shift();
     state.historyCursor = state.history.length - 1;
   }
 
@@ -707,10 +749,12 @@
       state.particles[i] = x + drift * dt + noiseScale * standardNormalRandom();
     }
 
-    state.time = Math.min(SIMULATION.maxTime, state.time + dt);
+    // 終了時刻はレッスンごとに異なる。到達時は端数を切って厳密に maxTime へ揃える。
+    const maxTime = currentLesson().maxTime;
+    state.time = Math.min(maxTime, state.time + dt);
     state.stepsSinceSnapshot++;
     recordSnapshot(false);
-    if (state.time >= SIMULATION.maxTime) state.running = false;
+    if (state.time >= maxTime) state.running = false;
   }
 
   /**
@@ -772,22 +816,65 @@
       && state.time >= SIMULATION.minTimeToReverse;
   }
 
-  /** Forward / Reverse を切り替える */
-  function toggleDirection() {
+  /** forward を reverse へ切り替え、そのまま戻り始める */
+  function startReverse() {
     if (!currentLesson().allowReverse) return;
 
-    if (state.direction === "forward") {
-      // 現在時刻に対応する score場を確実に持っておく。
-      recordSnapshot(true);
-      if (!canStartReverse()) return;
-      state.direction = "reverse";
-      state.historyCursor = state.history.length - 1;
-    } else {
-      state.direction = "forward";
-      // 再びforwardへ進むと、ここを起点に新しい score履歴を作り直す。
-      state.history = [];
-      state.stepsSinceSnapshot = 0;
-      recordSnapshot(true);
+    // 現在時刻に対応する score場を確実に持っておく。
+    recordSnapshot(true);
+    if (!canStartReverse()) return;
+
+    state.direction = "reverse";
+    state.historyCursor = state.history.length - 1;
+    // forward は maxTime 到達時に自動停止しているため、ここで再生を復帰させる。
+    // そうしないと「戻す」を押したのに何も起きない、という状態になる。
+    state.running = true;
+  }
+
+  // ===========================================================================
+  // 主ボタンの状態機械
+  //
+  // レッスンは Brown運動 → … → reverse という一方向の流れを持つため、
+  // 「次に何をすべきか」はシミュレーション状態から一意に決まる。そこで操作を
+  // 1つのボタンに集約し、常時 disabled のボタンを並べないようにしている。
+  // ===========================================================================
+
+  /**
+   * 主ボタンが今どの意味を持つかを解決する。
+   * @returns {{kind: "play"|"pause"|"reverse"|"nextLesson"|"restart", label: string}}
+   */
+  function resolvePrimaryAction() {
+    const lesson = currentLesson();
+    if (state.running) return { kind: "pause", label: "❚❚ 一時停止" };
+
+    // reverse を一時停止した場合は続きから再開する。t=0 まで戻り切ったら終了。
+    if (state.direction === "reverse") {
+      if (state.time <= 0) return { kind: "restart", label: "↺ もう一度" };
+      return { kind: "play", label: "▶ 再生" };
+    }
+
+    // forward が終了時刻まで到達したときにだけ、次の一手を提示する。
+    if (state.time >= lesson.maxTime) {
+      if (lesson.allowReverse) return { kind: "reverse", label: "⇠ score で戻す" };
+      const nextLessonIndex = state.lessonIndex + 1;
+      if (nextLessonIndex < lessons.length) {
+        return { kind: "nextLesson", label: `STEP ${nextLessonIndex + 1} へ →` };
+      }
+      return { kind: "restart", label: "↺ もう一度" };
+    }
+
+    return { kind: "play", label: "▶ 再生" };
+  }
+
+  /** 解決済みの action に従って主ボタンの動作を実行する */
+  function runPrimaryAction() {
+    const action = resolvePrimaryAction();
+    switch (action.kind) {
+      case "pause": state.running = false; break;
+      case "play": state.running = true; break;
+      case "reverse": startReverse(); break;
+      case "nextLesson": applyLesson(state.lessonIndex + 1); return;  // 内部でsyncUI済み
+      case "restart": resetSimulation(); return;                      // 内部でsyncUI済み
     }
     syncUI();
   }
@@ -799,16 +886,20 @@
   function syncUI() {
     const lesson = currentLesson();
     const isForward = state.direction === "forward";
+    const primaryAction = resolvePrimaryAction();
 
-    ui.play.textContent = state.running ? "❚❚ 一時停止" : "▶ 再生";
+    ui.primary.textContent = primaryAction.label;
+    // 「score で戻す」だけは score パネルと同じ violet 系に切り替え、
+    // 押した結果どのビューの話になるのかを色で示す。
+    ui.primary.classList.toggle("accent", primaryAction.kind === "reverse");
+    ui.primary.classList.toggle("primary", primaryAction.kind !== "reverse");
+
     ui.time.textContent = state.time.toFixed(2);
     ui.particleValue.textContent = particleCount();
     ui.noiseValue.textContent = noiseAmplitude().toFixed(2);
     ui.driftValue.textContent = driftStrength().toFixed(2);
     ui.speedValue.textContent = `${stepsPerFrame()}×`;
 
-    ui.reverse.disabled = !lesson.allowReverse || (isForward && !canStartReverse());
-    ui.reverse.textContent = isForward ? "⇠ Reverse" : "⇢ Forwardへ";
     ui.direction.textContent = isForward ? "Forward" : "Reverse";
     ui.direction.classList.toggle("reverse", !isForward);
 
@@ -1177,12 +1268,8 @@
   // イベント登録と起動
   // ===========================================================================
 
-  ui.play.addEventListener("click", () => {
-    state.running = !state.running;
-    syncUI();
-  });
+  ui.primary.addEventListener("click", runPrimaryAction);
   ui.reset.addEventListener("click", resetSimulation);
-  ui.reverse.addEventListener("click", toggleDirection);
 
   // 粒子数の変更は粒子集団の作り直しを伴うため、確定時のみ反映する。
   ui.particleSlider.addEventListener("change", resetSimulation);

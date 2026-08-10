@@ -9,9 +9,12 @@
     見た目は style.css が担当し、ここには計算に関わる値を書かない。
 
   【app.js との対応】
-    - 操作系の要素は id で app.js から参照される（playBtn, resetBtn,
-      reverseBtn, 各スライダー, simCanvas など）。id を変更する場合は
+    - 操作系の要素は id で app.js から参照される（primaryBtn, resetBtn,
+      各スライダー, simCanvas など）。id を変更する場合は
       app.js 冒頭の ui オブジェクトも合わせて修正すること。
+    - 操作ボタンは primaryBtn と resetBtn の2つだけである。primaryBtn は
+      「再生 / 一時停止 / 次のSTEPへ / scoreで戻す / もう一度」を状態に応じて
+      切り替える単一のボタンで、判定は app.js の resolvePrimaryAction() にある。
     - レッスンの見出し・本文・スライダー初期値は app.js の lessons 配列が
       唯一の情報源であり、起動時に applyLesson() が流し込む。
       したがって各 input の value 属性は表示の初期値にすぎない。
@@ -56,9 +59,13 @@
     <section class="main-panel">
       <div class="toolbar card">
         <div class="toolbar-row primary-controls">
-          <button id="playBtn" class="button primary" type="button">▶ 再生</button>
+          <!--
+            主ボタンは1つだけ。ラベルと動作はシミュレーション状態から
+            app.js の resolvePrimaryAction() が決めるため、ここでの文字列は
+            初期表示（t=0・停止中）のものにすぎない。
+          -->
+          <button id="primaryBtn" class="button primary" type="button">▶ 再生</button>
           <button id="resetBtn" class="button" type="button">↺ リセット</button>
-          <button id="reverseBtn" class="button accent" type="button">⇠ Reverse</button>
           <div class="status-pill" id="directionStatus">Forward</div>
           <div class="time-readout">t = <span id="timeValue">0.00</span></div>
         </div>
@@ -135,9 +142,9 @@
       <section class="card reverse-note">
         <h2>Reverse diffusion の見方</h2>
         <p>
-          レッスン5では、まず Forward を進めて分布を拡散させてください。Forward中に時刻ごとの経験分布とscoreを保存します。
-          その後 <strong>Reverse</strong> を押すと、現在の粒子を「保存した集団のscore」で高密度側へ戻します。
-          これは各粒子の軌跡を逆再生しているわけではありません。
+          レッスン5では、まず Forward を進めて分布を拡散させてください。二峰構造が単峰へ潰れきったところで自動的に停止します。
+          Forward中は時刻ごとのscoreを保存しているので、その後 <strong>「⇠ score で戻す」</strong> を押すと、
+          現在の粒子を「保存した集団のscore」で高密度側へ戻します。これは各粒子の軌跡を逆再生しているわけではありません。
         </p>
         <div class="formula-box">
           backward step: <code>Xₜ₋Δₜ ≈ Xₜ + [−f(Xₜ,t) + σ² sₜ(Xₜ)]Δt + σ√Δt ξ</code>
