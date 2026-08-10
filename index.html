@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Brown運動からLangevin方程式、確率分布、score、reverse diffusionまでを粒子シミュレーションで学ぶ1次元教材" />
+  <title>Langevin & Score Lab</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow">Interactive SDE Playground</p>
+      <h1>Langevin &amp; Score Lab</h1>
+      <p class="lead">
+        SDEで動くのは<strong>個々の粒子</strong>。scoreが見ているのは、粒子集団が作る<strong>確率分布</strong>。
+        Brown運動から reverse diffusion までを、同じ画面でつなげて観察します。
+      </p>
+      <div class="concept-chain" aria-label="学習の流れ">
+        <span>Brown運動</span><b>→</b><span>Langevin</span><b>→</b><span>確率分布</span><b>→</b><span>score</span><b>→</b><span>reverse diffusion</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="lesson-panel" aria-label="レッスン">
+      <h2>レッスン</h2>
+      <div id="lessonButtons" class="lesson-buttons"></div>
+      <div id="lessonText" class="lesson-text"></div>
+    </aside>
+
+    <section class="main-panel">
+      <div class="toolbar card">
+        <div class="toolbar-row primary-controls">
+          <button id="playBtn" class="button primary" type="button">▶ 再生</button>
+          <button id="resetBtn" class="button" type="button">↺ リセット</button>
+          <button id="reverseBtn" class="button accent" type="button">⇠ Reverse</button>
+          <div class="status-pill" id="directionStatus">Forward</div>
+          <div class="time-readout">t = <span id="timeValue">0.00</span></div>
+        </div>
+
+        <div class="controls-grid">
+          <label>
+            <span>粒子数 N</span>
+            <input id="particleSlider" type="range" min="100" max="1400" step="100" value="600" />
+            <output id="particleValue">600</output>
+          </label>
+          <label>
+            <span>ノイズ σ</span>
+            <input id="noiseSlider" type="range" min="0.15" max="1.6" step="0.05" value="0.85" />
+            <output id="noiseValue">0.85</output>
+          </label>
+          <label>
+            <span>drift 強度 k</span>
+            <input id="driftSlider" type="range" min="0" max="1.5" step="0.05" value="0" />
+            <output id="driftValue">0.00</output>
+          </label>
+          <label>
+            <span>表示速度</span>
+            <input id="speedSlider" type="range" min="1" max="6" step="1" value="2" />
+            <output id="speedValue">2×</output>
+          </label>
+        </div>
+      </div>
+
+      <div class="equation-strip card" aria-live="polite">
+        <div>
+          <span class="label">現在のSDE</span>
+          <code id="sdeEquation">dXₜ = σ dWₜ</code>
+        </div>
+        <div>
+          <span class="label">score</span>
+          <code>sₜ(x) = ∂ₓ log pₜ(x)</code>
+        </div>
+        <div class="key-idea" id="keyIdea">各粒子は独立なBrown運動をします。</div>
+      </div>
+
+      <section class="viz-card card">
+        <div class="viz-header">
+          <div>
+            <h2>同期ビュー</h2>
+            <p>同じ粒子集団を「粒子」「分布」「score」の3つの見方で表示します。</p>
+          </div>
+          <div class="legend">
+            <span><i class="dot particle"></i>粒子</span>
+            <span><i class="dot density"></i>経験分布</span>
+            <span><i class="dot score"></i>score</span>
+          </div>
+        </div>
+        <canvas id="simCanvas" width="1200" height="760" aria-label="ランジュバン方程式のシミュレーション"></canvas>
+      </section>
+
+      <section class="explain-grid">
+        <article class="card explain-card">
+          <p class="number">1</p>
+          <h3>Particle view</h3>
+          <p>各点が1つの確率変数の実現値 <code>Xₜ⁽ⁱ⁾</code>。SDEはこの1粒子ごとの時間発展を記述します。</p>
+        </article>
+        <article class="card explain-card">
+          <p class="number">2</p>
+          <h3>Distribution view</h3>
+          <p>多数の粒子を同時に観察すると、集団の密度として <code>pₜ(x)</code> が現れます。</p>
+        </article>
+        <article class="card explain-card">
+          <p class="number">3</p>
+          <h3>Score view</h3>
+          <p><code>∂ₓ log pₜ(x)</code> は、その位置から「密度が高くなる方向」を示します。粒子の過去は参照しません。</p>
+        </article>
+      </section>
+
+      <section class="card reverse-note">
+        <h2>Reverse diffusion の見方</h2>
+        <p>
+          レッスン5では、まず Forward を進めて分布を拡散させてください。Forward中に時刻ごとの経験分布とscoreを保存します。
+          その後 <strong>Reverse</strong> を押すと、現在の粒子を「保存した集団のscore」で高密度側へ戻します。
+          これは各粒子の軌跡を逆再生しているわけではありません。
+        </p>
+        <div class="formula-box">
+          backward step: <code>Xₜ₋Δₜ ≈ Xₜ + [−f(Xₜ,t) + σ² sₜ(Xₜ)]Δt + σ√Δt ξ</code>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer>
+    <p>Pure HTML + Canvas + JavaScript. No build step, no external library.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
