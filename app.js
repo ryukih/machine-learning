@@ -171,9 +171,13 @@
     /** プロット領域の左端と、論理幅から差し引く総マージン */
     plotLeft: 78,
     plotWidthInset: 120,
-    /** パネル内キャプションのベースライン距離（上端から） */
-    captionOffsetY: 35,
-    particleCaptionOffsetY: 36,
+    /**
+     * 見出しの末尾からキャプション開始位置までの間隔 [px]。
+     * キャプションは見出しと同じベースラインに、見出しの実測幅ぶん右へ
+     * ずらして置く。パネル上端に使える行が少なく、右側は drift ラベルと
+     * Reverse バッジが占有しているため、見出しの直後が唯一空いている。
+     */
+    panelCaptionGap: 20,
     /** 各パネルの横軸位置（パネル下端からの距離） */
     particleAxisOffsetFromBottom: 44,
     densityAxisOffsetFromBottom: 38,
@@ -276,8 +280,27 @@
    */
   const PARTICLE_JITTER = Object.freeze({ multiplier: 47, modulus: 71 });
 
-  /** アニメーションループの最小フレーム間隔 [ms]（およそ60fpsに制限する） */
-  const MIN_FRAME_INTERVAL_MS = 16;
+  /**
+   * モデル時間を進める基準間隔 [ms]。
+   * 表示速度スライダーの「1×」は、この間隔ごとに1ステップ進むことを意味する。
+   * 実時間を基準にしているため、ディスプレイのリフレッシュレートが
+   * 60Hz でも 144Hz でも同じ速さで進む。
+   */
+  const SIMULATION_TICK_MS = 1000 / 60;
+
+  /**
+   * 1フレームで消化する経過時間の上限 [ms]。
+   * タブが非アクティブだった間の経過時間をそのまま加算すると、復帰時に
+   * 数百ステップを一度に処理して固まるため、ここで打ち切る。
+   */
+  const MAX_FRAME_ELAPSED_MS = 100;
+
+  /**
+   * 描画に使う devicePixelRatio の上限。
+   * バッキングストアの画素数は倍率の2乗で増えるため、3倍の端末では塗り面積が
+   * 9倍になり1フレームの負荷が跳ね上がる。2倍あれば十分に鮮明なので打ち切る。
+   */
+  const MAX_DEVICE_PIXEL_RATIO = 2;
 
   // ===========================================================================
   // レッスン定義
@@ -390,7 +413,10 @@
   // ===========================================================================
 
   const canvas = document.getElementById("simCanvas");
-  const ctx = canvas.getContext("2d");
+  // alpha: false はキャンバス自体が不透明であることをブラウザに伝える。
+  // draw() が毎フレーム全面を不透明色で塗り潰すので透明度は不要であり、
+  // 合成時のアルファ処理を省ける。
+  const ctx = canvas.getContext("2d", { alpha: false });
 
   /** 描画コードが使う論理座標系のサイズ。HTML の属性値を情報源とする。 */
   const logicalWidth = canvas.width;
@@ -422,7 +448,7 @@
    * setTransform は絶対指定なので、繰り返し呼んでも倍率は累積しない。
    */
   function configureCanvasForDisplayDensity() {
-    const pixelRatio = window.devicePixelRatio || 1;
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO);
     canvas.width = Math.round(logicalWidth * pixelRatio);
     canvas.height = Math.round(logicalHeight * pixelRatio);
     ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
@@ -952,7 +978,16 @@
     ctx.fill();
   }
 
-  /** パネルの枠と見出しを描く */
+  /**
+   * パネルの枠と見出しを描き、本文キャプションを置ける位置を返す。
+   *
+   * キャプション位置を定数で持たず measureText で実測しているのは、
+   * 見出しの幅がフォントの有無や描画環境で変わるためである。固定値にすると
+   * 環境によって見出しとキャプションが重なる（実際に元の実装では
+   * 見出し x=42・キャプション x=78 が同一ベースラインで重なっていた）。
+   *
+   * @returns {{x: number, y: number}} キャプションの描画基準位置
+   */
   function drawPanelFrame(panel, title, subtitle, titleColor) {
     ctx.save();
     ctx.fillStyle = PALETTE.panelFill;
@@ -966,13 +1001,21 @@
     ctx.fill();
     ctx.stroke();
 
+    const titleBaselineY = panel.top + LAYOUT.panelTitleOffsetY;
     ctx.fillStyle = titleColor;
     ctx.font = TYPOGRAPHY.panelTitle;
-    ctx.fillText(title, LAYOUT.panelTitleOffsetX, panel.top + LAYOUT.panelTitleOffsetY);
+    const titleWidth = ctx.measureText(title).width;
+    ctx.fillText(title, LAYOUT.panelTitleOffsetX, titleBaselineY);
+
     ctx.fillStyle = PALETTE.panelSubtitle;
     ctx.font = TYPOGRAPHY.panelSubtitle;
     ctx.fillText(subtitle, LAYOUT.panelTitleOffsetX, panel.top + LAYOUT.panelSubtitleOffsetY);
     ctx.restore();
+
+    return {
+      x: LAYOUT.panelTitleOffsetX + titleWidth + LAYOUT.panelCaptionGap,
+      y: titleBaselineY,
+    };
   }
 
   /** 横軸と目盛を描く */
@@ -1011,7 +1054,7 @@
   // ===========================================================================
 
   /** drift場 f(x) = −kx が原点へ向かうことを矢印で示す */
-  function drawDriftFieldArrows(axisY, panel, geometry) {
+  function drawDriftFieldArrows(axisY, caption, geometry) {
     ctx.save();
     ctx.strokeStyle = PALETTE.driftArrowStroke;
     ctx.fillStyle = PALETTE.driftArrowFill;
@@ -1026,11 +1069,13 @@
         LAYOUT.driftArrowHeadSize);
     }
 
+    // drift ラベルはパネル右側に置く。左側は見出しと粒子数キャプションが
+    // 使っているため、同じベースラインでも衝突しない。
     ctx.fillStyle = PALETTE.driftLabel;
     ctx.font = TYPOGRAPHY.caption;
     ctx.fillText("drift f(x)=−kx",
       geometry.left + geometry.width - LAYOUT.driftLabelOffsetFromRight,
-      panel.top + LAYOUT.captionOffsetY);
+      caption.y);
     ctx.restore();
   }
 
@@ -1056,20 +1101,19 @@
     }
   }
 
-  function drawParticlePanel(panel) {
+  function drawParticlePanel(panel, caption) {
     const geometry = plotGeometry();
     const axisY = panel.top + panel.height - LAYOUT.particleAxisOffsetFromBottom;
     drawHorizontalAxis(axisY, geometry);
 
     if (currentLesson().showDriftField && isDriftActive(driftStrength())) {
-      drawDriftFieldArrows(axisY, panel, geometry);
+      drawDriftFieldArrows(axisY, caption, geometry);
     }
     drawParticleDots(axisY, geometry);
 
     ctx.fillStyle = PALETTE.particleCaption;
     ctx.font = TYPOGRAPHY.caption;
-    ctx.fillText(`N = ${state.particles.length} particles`,
-      geometry.left, panel.top + LAYOUT.particleCaptionOffsetY);
+    ctx.fillText(`N = ${state.particles.length} particles`, caption.x, caption.y);
   }
 
   // ===========================================================================
@@ -1134,7 +1178,7 @@
     ctx.stroke();
   }
 
-  function drawDistributionPanel(panel) {
+  function drawDistributionPanel(panel, caption) {
     const geometry = plotGeometry();
     const baselineY = panel.top + panel.height - LAYOUT.densityAxisOffsetFromBottom;
     drawHorizontalAxis(baselineY, geometry);
@@ -1150,7 +1194,7 @@
 
     ctx.fillStyle = PALETTE.densityCaption;
     ctx.font = TYPOGRAPHY.caption;
-    ctx.fillText("粒子から推定した pₜ(x)", geometry.left, panel.top + LAYOUT.captionOffsetY);
+    ctx.fillText("粒子から推定した pₜ(x)", caption.x, caption.y);
   }
 
   // ===========================================================================
@@ -1206,7 +1250,7 @@
       panel.top + LAYOUT.reverseBadgeTextOffsetY);
   }
 
-  function drawScorePanel(panel) {
+  function drawScorePanel(panel, caption) {
     const geometry = plotGeometry();
     const axisY = panel.top + panel.height - LAYOUT.scoreAxisOffsetFromBottom;
     drawHorizontalAxis(axisY, geometry);
@@ -1220,8 +1264,7 @@
 
     ctx.fillStyle = PALETTE.scoreCaption;
     ctx.font = TYPOGRAPHY.caption;
-    ctx.fillText("sₜ(x)=∂ₓ log pₜ(x)  —  矢印は高密度方向",
-      geometry.left, panel.top + LAYOUT.captionOffsetY);
+    ctx.fillText("sₜ(x)=∂ₓ log pₜ(x)  —  矢印は高密度方向", caption.x, caption.y);
 
     if (state.direction === "reverse") drawReverseBadge(panel, geometry);
   }
@@ -1231,21 +1274,23 @@
   // ===========================================================================
 
   function draw() {
-    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
+    // 背景は不透明色で全面を塗るため、事前の clearRect は不要
+    // （論理サイズの4倍近い画素を塗る操作なので、省くとフレーム負荷が下がる）。
     ctx.fillStyle = PALETTE.canvasBackground;
     ctx.fillRect(0, 0, logicalWidth, logicalHeight);
 
     const panels = LAYOUT.panels;
-    drawPanelFrame(panels.particles,
+    // 枠と見出しを先に描き、返ってきた位置に各パネルがキャプションを載せる。
+    const particleCaption = drawPanelFrame(panels.particles,
       "1. Individual particles", "SDE が直接動かしている対象", PALETTE.particleTitle);
-    drawPanelFrame(panels.distribution,
+    const distributionCaption = drawPanelFrame(panels.distribution,
       "2. Distribution  pₜ(x)", "粒子集団から現れる経験分布", PALETTE.densityTitle);
-    drawPanelFrame(panels.score,
+    const scoreCaption = drawPanelFrame(panels.score,
       "3. Score  ∂ₓ log pₜ(x)", "分布が教える「高密度方向」", PALETTE.scoreTitle);
 
-    drawParticlePanel(panels.particles);
-    drawDistributionPanel(panels.distribution);
-    drawScorePanel(panels.score);
+    drawParticlePanel(panels.particles, particleCaption);
+    drawDistributionPanel(panels.distribution, distributionCaption);
+    drawScorePanel(panels.score, scoreCaption);
   }
 
   // ===========================================================================
@@ -1253,13 +1298,48 @@
   // ===========================================================================
 
   let lastFrameTimestamp = performance.now();
+  /** 未消化の経過時間 [ms]。SIMULATION_TICK_MS 溜まるごとに1回進める。 */
+  let stepAccumulatorMs = 0;
+  /** 次のフレームで再描画が必要か */
+  let needsRedraw = true;
 
+  /**
+   * 表示フレームごとの更新。
+   *
+   * 進めるステップ数を「経過実時間」から決めているのは、requestAnimationFrame の
+   * 間隔がディスプレイのリフレッシュレートで変わるためである。元の実装は
+   * 「前回から16ms以上経過していたらそのフレームで進める」という判定だったので、
+   *   (a) 60Hz では間隔16.7msが閾値ぎりぎりで、わずかなジッタでフレームが
+   *       丸ごとスキップされる。syncUI と draw も同じ判定の内側にあったため、
+   *       ボタンのラベル更新が目に見えて遅れる原因になっていた。
+   *   (b) 144Hz では3フレームに1回しか進まず、約20%遅くなる。
+   * という2つの問題があった。実時間基準にすることで両方とも解消する。
+   *
+   * 停止中は描画もしない。粒子も分布も動いていないため、塗り直す必要がない。
+   */
   function animate(now) {
-    if (now - lastFrameTimestamp > MIN_FRAME_INTERVAL_MS) {
-      if (state.running) advanceSimulation();
+    // タブ復帰直後の巨大な経過時間は上限で切る。
+    const elapsedMs = Math.min(now - lastFrameTimestamp, MAX_FRAME_ELAPSED_MS);
+    lastFrameTimestamp = now;
+
+    if (state.running) {
+      stepAccumulatorMs += elapsedMs;
+      while (stepAccumulatorMs >= SIMULATION_TICK_MS && state.running) {
+        stepAccumulatorMs -= SIMULATION_TICK_MS;
+        advanceSimulation();
+      }
+      // ループ内で running が false になった場合（maxTime到達・reverse完走）も
+      // その状態を1度は描き出す必要があるため、ここで無条件に立てる。
+      needsRedraw = true;
+    } else {
+      // 停止中は端数を持ち越さない。再開した瞬間に飛ぶのを防ぐ。
+      stepAccumulatorMs = 0;
+    }
+
+    if (needsRedraw) {
       syncUI();
       draw();
-      lastFrameTimestamp = now;
+      needsRedraw = false;
     }
     requestAnimationFrame(animate);
   }
