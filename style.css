@@ -7,20 +7,28 @@
  *   ラボ名を縦に並べるだけの入口ページの配色とレイアウトを定義する。
  *   各ラボは自前の style.css を持っており、このファイルを読み込まない。
  *
+ * 【デザインの方針】
+ *   情報量を増やさずに密度を出すため、装飾ではなく組版で構成する。
+ *     - 見出しは2行に分けた大きな面として置き、字間を詰めて塊に見せる。
+ *     - 一覧はカードを並べず、番号 + 名前 + 状態の3カラムを罫線で仕切る
+ *       インデックス体裁にする。名前以外の要素は徹底して小さく淡くし、
+ *       視線がラボ名だけを拾えるようにする。
+ *     - 色は hover 時にのみ現れる。静止状態はグレースケールに近づける。
+ *
  * 【配色の規約】
  *   :root のカスタムプロパティは各ラボの style.css と同じ値を定義している。
- *   共通ファイルに切り出さず意図的に重複させているのは、ラボごとに
- *   完結させてページ間で見た目が壊し合わないようにするためである。
- *   配色を変える場合は各ページの :root を揃えて直す必要がある。
+ *   共通ファイルに切り出さず意図的に重複させているのは、ラボごとに完結させて
+ *   ページ間で見た目が壊し合わないようにするためである。
+ *   ラボ固有の色は --accent としてエントリ単位で上書きし、罫線・番号・矢印が
+ *   それを参照する。エントリを増やすときは --accent だけ足せばよい。
  *
  * 【レイアウトの構造】
- *   .topics は1列固定のGrid。1行が1ラボに対応し、公開済みのものは <a> で
- *   行全体をクリック領域にする。未公開のものは .is-upcoming として
- *   リンクにせず、彩度を落として区別する。
- *   行の左端の色帯はトピックの識別用で、ラボごとに色を変える。
+ *   .backdrop は position: fixed の装飾レイヤ（粒子場）。下端へ向けて
+ *   mask でフェードさせ、一覧の可読性を落とさないようにしている。
+ *   .page が実体で、z-index で backdrop の上に置く。
  *
  * 【ブレークポイント】
- *   560px : 余白と字送りを詰める。列構成は変わらない（元から1列）。
+ *   680px : 番号カラムを畳み、字送りと余白を詰める。列構成は1列のまま。
  * =============================================================================
  */
 
@@ -39,83 +47,136 @@
 }
 
 * { box-sizing: border-box; }
+
 body {
   margin: 0;
+  min-height: 100vh;
   color: var(--ink);
   background:
-    radial-gradient(circle at 5% 0%, rgba(37, 99, 235, .11), transparent 28rem),
-    radial-gradient(circle at 100% 18%, rgba(124, 58, 237, .08), transparent 26rem),
+    radial-gradient(circle at 12% -5%, rgba(124, 58, 237, .10), transparent 32rem),
+    radial-gradient(circle at 92% 8%, rgba(37, 99, 235, .10), transparent 30rem),
     var(--bg);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", sans-serif;
-  line-height: 1.65;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
 
-.hero {
-  width: min(820px, calc(100% - 48px));
+/* ---- 背景の粒子場 --------------------------------------------------------
+   情報を持たない装飾レイヤ。下端へフェードさせ、一覧の背後では消えるようにする。 */
+.backdrop {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: min(78vh, 720px);
+  pointer-events: none;
+  z-index: 0;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 45%, transparent 100%);
+}
+.backdrop canvas { display: block; width: 100%; height: 100%; }
+
+.page {
+  position: relative;
+  z-index: 1;
+  width: min(860px, calc(100% - 52px));
   margin: 0 auto;
-  padding: 72px 0 26px;
 }
-h1 {
+
+/* ---- 見出し ---- */
+.hero { padding: clamp(76px, 16vh, 152px) 0 clamp(38px, 7vh, 64px); }
+.display {
   margin: 0;
-  font-size: clamp(2.2rem, 6vw, 3.6rem);
-  line-height: 1.05;
-  letter-spacing: -.05em;
+  font-size: clamp(2.9rem, 9.5vw, 5.6rem);
+  font-weight: 800;
+  line-height: .94;
+  letter-spacing: -.055em;
 }
+/* 2語を別々の行に置き、大きな面として見せる */
+.display span { display: block; }
+.display span:last-child { color: var(--muted); }
 
-.topics {
-  width: min(820px, calc(100% - 48px));
-  margin: 0 auto 80px;
+/* ---- インデックス --------------------------------------------------------
+   番号・名前・状態の3カラム。罫線は上端に1本、各行の下に1本。 */
+.index { border-top: 1px solid var(--line); padding-bottom: clamp(60px, 14vh, 130px); }
+
+.entry {
+  --accent: var(--muted);
+  position: relative;
   display: grid;
-  grid-template-columns: 1fr;   /* ラボを縦に並べる */
-  gap: 12px;
-}
-
-.topic {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 22px 24px;
-  background: var(--paper);
-  border: 1px solid rgba(203, 213, 225, .8);
-  /* 左端の色帯でトピックを識別する。色は各 .topic-* が上書きする。 */
-  border-left: 4px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(10px);
+  grid-template-columns: 3.4rem 1fr auto;
+  align-items: baseline;
+  gap: 0 1.1rem;
+  padding: clamp(22px, 3.4vh, 32px) 0;
+  border-bottom: 1px solid var(--line);
   text-decoration: none;
   color: inherit;
-  transition: transform .16s ease, box-shadow .16s ease;
 }
-a.topic:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 22px 55px rgba(31, 41, 55, .13);
+.entry-langevin { --accent: var(--violet); }
+.entry-transformer { --accent: var(--green); }
+
+/* hover時に左から伸びる下線。罫線に重ねてアクセント色を差す。 */
+.entry::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 0;
+  height: 1px;
+  background: var(--accent);
+  transition: width .38s cubic-bezier(.22, .61, .36, 1);
 }
+a.entry:hover::after, a.entry:focus-visible::after { width: 100%; }
 
-.topic-langevin { border-left-color: var(--violet); }
-.topic-transformer { border-left-color: var(--green); }
-
-.topic-name { font-size: 1.3rem; font-weight: 800; letter-spacing: -.015em; }
-
-.topic-arrow { color: var(--muted); font-size: 1.15rem; transition: transform .16s ease; }
-a.topic:hover .topic-arrow { transform: translateX(4px); }
-
-.topic-badge {
-  padding: 4px 11px;
-  border-radius: 999px;
-  background: #f1f5f9;
-  color: var(--muted);
+.entry-number {
   font-size: .72rem;
   font-weight: 800;
+  letter-spacing: .12em;
+  font-variant-numeric: tabular-nums;
+  color: #b3bdcc;
+  transition: color .28s ease;
+}
+a.entry:hover .entry-number, a.entry:focus-visible .entry-number { color: var(--accent); }
+
+.entry-name {
+  font-size: clamp(1.22rem, 2.9vw, 1.72rem);
+  font-weight: 750;
+  letter-spacing: -.025em;
+  transition: transform .38s cubic-bezier(.22, .61, .36, 1);
+}
+/* 名前だけをわずかに送り出し、行が開く感じを出す */
+a.entry:hover .entry-name, a.entry:focus-visible .entry-name { transform: translateX(6px); }
+
+.entry-arrow {
+  font-size: 1.1rem;
+  color: #b3bdcc;
+  transition: transform .38s cubic-bezier(.22, .61, .36, 1), color .28s ease;
+}
+a.entry:hover .entry-arrow, a.entry:focus-visible .entry-arrow {
+  transform: translateX(8px);
+  color: var(--accent);
+}
+
+.entry-status {
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .1em;
+  color: #b3bdcc;
   white-space: nowrap;
 }
 
-/* 未公開のラボはリンクにせず、彩度を落として区別する */
-.is-upcoming { opacity: .55; box-shadow: none; }
+/* 未公開のラボはリンクにせず、名前も一段落として区別する */
+.is-upcoming .entry-name { color: #9aa4b2; font-weight: 700; }
 
-@media (max-width: 560px) {
-  .hero, .topics { width: calc(100% - 32px); }
-  .hero { padding: 46px 0 20px; }
-  .topic { padding: 18px 18px; }
-  .topic-name { font-size: 1.12rem; }
+a.entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: 4px; }
+
+@media (max-width: 680px) {
+  .page { width: calc(100% - 34px); }
+  /* 番号は行頭から外し、名前と状態の2カラムにする */
+  .entry { grid-template-columns: 1fr auto; gap: 0 .8rem; }
+  .entry-number { display: none; }
+}
+
+/* アニメーションを望まない環境では、移動と伸長を止める */
+@media (prefers-reduced-motion: reduce) {
+  .entry::after, .entry-name, .entry-arrow, .entry-number { transition: none; }
+  a.entry:hover .entry-name, a.entry:hover .entry-arrow { transform: none; }
 }

@@ -16,13 +16,17 @@
         /transformer-lab/        （準備中）
 
     各ラボは自前の index.html / app.js / style.css を持ち、
-    他のラボやこのページの CSS に依存しない。ラボ間で
-    見た目が壊し合わないことを優先した構成である。
+    他のラボやこのページの CSS に依存しない。
+
+  【背景の粒子場について】
+    particle-field.js が描く装飾で、情報は持たない（aria-hidden）。
+    このサイトの主題が拡散過程であることを、文字を増やさずに示すために置いている。
+    読み込みに失敗してもページの機能は損なわれない。
 
   【リンクについて】
     ディレクトリへのリンクは末尾スラッシュ付きの相対パス（例 "langevin-score-lab/"）
     とする。GitHub Pages はディレクトリ直下の index.html を返すため、
-    これでプロジェクトページのサブパス配信下でも正しく解決される。
+    プロジェクトページのサブパス配信下でも正しく解決される。
     未作成のラボはリンクにせず、準備中であることだけを示す。
   =============================================================================
 -->
@@ -35,20 +39,30 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="hero">
-    <h1>Machine Learning</h1>
-  </header>
+  <div class="backdrop" aria-hidden="true">
+    <canvas id="particleField"></canvas>
+  </div>
 
-  <main class="topics" aria-label="トピック一覧">
-    <a class="topic topic-langevin" href="langevin-score-lab/">
-      <span class="topic-name">Langevin &amp; Score Lab</span>
-      <span class="topic-arrow" aria-hidden="true">→</span>
-    </a>
+  <div class="page">
+    <header class="hero">
+      <h1 class="display"><span>Machine</span><span>Learning</span></h1>
+    </header>
 
-    <div class="topic topic-transformer is-upcoming">
-      <span class="topic-name">Transformer Lab</span>
-      <span class="topic-badge">準備中</span>
-    </div>
-  </main>
+    <main class="index" aria-label="トピック一覧">
+      <a class="entry entry-langevin" href="langevin-score-lab/">
+        <span class="entry-number" aria-hidden="true">01</span>
+        <span class="entry-name">Langevin &amp; Score Lab</span>
+        <span class="entry-arrow" aria-hidden="true">→</span>
+      </a>
+
+      <div class="entry entry-transformer is-upcoming">
+        <span class="entry-number" aria-hidden="true">02</span>
+        <span class="entry-name">Transformer Lab</span>
+        <span class="entry-status">準備中</span>
+      </div>
+    </main>
+  </div>
+
+  <script src="particle-field.js"></script>
 </body>
 </html>
