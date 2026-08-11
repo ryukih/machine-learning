@@ -60,7 +60,8 @@
             <h3>拡散モデルとは</h3>
             <p>
               データ分布 <code>p₀(x)</code> から出たデータに少しずつノイズを加え、既知のガウス分布へ潰していく
-              forward SDE を設計します。その各時刻の<strong>周辺分布のスコア</strong> <code>∇ₓ log pₜ(x)</code> を学習し、
+              forward SDE を設計します。その各時刻の<strong>周辺分布のスコア</strong>
+              <code>sₜ(x) = ∇ₓ log pₜ(x)</code> を学習し、
               逆時間SDEでガウス分布から <code>p₀(x)</code> へ積分し戻す — これが骨格です。
             </p>
             <div class="intro-formula">
