@@ -5,8 +5,8 @@
   =============================================================================
 
   【このファイルの目的】
-    機械学習の概念を対話的に確かめる教材（ラボ）の一覧を示す入口。
-    各ラボの中身には関与せず、リンクと概要だけを持つ。
+    各ラボへの入口だけを提供する。ラボ名を縦に並べるのみで、内容の説明は置かない。
+    詳細は各ラボのページ側で読ませる方針のため、ここに解説を足さないこと。
 
   【構成の規約】
     ラボは1つにつき1ディレクトリとし、その中で完結させる。
@@ -18,67 +18,37 @@
     各ラボは自前の index.html / app.js / style.css を持ち、
     他のラボやこのページの CSS に依存しない。ラボ間で
     見た目が壊し合わないことを優先した構成である。
-    配色だけは各ページの :root で同じ値を定義して揃えている。
 
   【リンクについて】
     ディレクトリへのリンクは末尾スラッシュ付きの相対パス（例 "langevin-score-lab/"）
     とする。GitHub Pages はディレクトリ直下の index.html を返すため、
     これでプロジェクトページのサブパス配信下でも正しく解決される。
+    未作成のラボはリンクにせず、準備中であることだけを示す。
   =============================================================================
 -->
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="機械学習の概念を、手を動かして確かめる対話的な教材集。拡散モデルのscoreを粒子シミュレーションで可視化するラボなど。" />
+  <meta name="description" content="機械学習の概念を、手を動かして確かめる対話的な教材集" />
   <title>Machine Learning</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header class="hero">
-    <div class="hero-inner">
-      <p class="eyebrow">Interactive Notes</p>
-      <h1>Machine Learning</h1>
-      <p class="lead">
-        機械学習の概念を、式を眺めるだけでなく<strong>動かして確かめる</strong>ための教材集です。
-        いずれも外部ライブラリなしの静的ページで、ブラウザだけで完結します。
-      </p>
-    </div>
+    <h1>Machine Learning</h1>
   </header>
 
   <main class="topics" aria-label="トピック一覧">
-    <a class="topic-card topic-langevin" href="langevin-score-lab/">
-      <div class="topic-head">
-        <p class="topic-eyebrow">SDE ・ 生成モデル</p>
-        <h2>Langevin &amp; Score Lab</h2>
-      </div>
-      <p class="topic-desc">
-        拡散モデルの中心にある <code>sₜ(x) = ∇ₓ log pₜ(x)</code> が、
-        何を見ている量なのかを1次元の粒子シミュレーションで可視化します。
-        <strong>SDEが動かすのは個々の粒子</strong>、
-        <strong>score が参照するのは粒子集団が作る分布</strong> —
-        この2つの層を同じ画面に並べて観察できます。
-      </p>
-      <div class="topic-chain" aria-label="扱う流れ">
-        <span>Brown運動</span><b>→</b><span>Langevin</span><b>→</b><span>確率分布</span><b>→</b><span>score</span><b>→</b><span>reverse diffusion</span>
-      </div>
-      <p class="topic-go">ラボを開く <span aria-hidden="true">→</span></p>
+    <a class="topic topic-langevin" href="langevin-score-lab/">
+      <span class="topic-name">Langevin &amp; Score Lab</span>
+      <span class="topic-arrow" aria-hidden="true">→</span>
     </a>
 
-    <div class="topic-card topic-transformer is-upcoming">
-      <div class="topic-head">
-        <p class="topic-eyebrow">系列モデル ・ 注意機構</p>
-        <h2>Transformer Lab</h2>
-        <span class="topic-badge">準備中</span>
-      </div>
-      <p class="topic-desc">
-        Transformer の仕組みを対話的に確かめるラボです。内容は準備中です。
-      </p>
+    <div class="topic topic-transformer is-upcoming">
+      <span class="topic-name">Transformer Lab</span>
+      <span class="topic-badge">準備中</span>
     </div>
   </main>
-
-  <footer>
-    <p>Pure HTML + CSS + JavaScript. No build step, no external library.</p>
-  </footer>
 </body>
 </html>
