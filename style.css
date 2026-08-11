@@ -76,6 +76,44 @@ h1 { margin: 0; font-size: clamp(2.3rem, 6vw, 5rem); line-height: 1; letter-spac
 .concept-chain span { background: white; border: 1px solid var(--line); padding: 6px 10px; border-radius: 999px; box-shadow: 0 4px 12px rgba(15,23,42,.04); }
 .concept-chain b { color: #98a2b3; }
 
+/* ---- ページ最上部の位置づけ説明 -------------------------------------------
+   3項目を横並びにし、拡散モデルの定義 / 本デモの役割 / 実際との差 を対比させる。
+   見出しの色は意味づけで分けている（定義=青、役割=シアン、注意=オレンジ）。   */
+.intro { margin-top: 30px; padding: 22px 24px; }
+.intro h2 { margin: 0 0 5px; font-size: 1rem; }
+.intro-sub { margin: 0 0 18px; color: var(--muted); font-size: .84rem; }
+.intro-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+.intro-item h3 {
+  margin: 0 0 8px;
+  font-size: .78rem;
+  font-weight: 850;
+  letter-spacing: .06em;
+}
+.intro-what h3 { color: var(--blue); }
+.intro-role h3 { color: var(--cyan); }
+.intro-caveat h3 { color: var(--orange); }
+.intro-item p { margin: 0; font-size: .85rem; line-height: 1.8; color: #475467; }
+.intro-item strong { color: #101828; }
+.intro-item code { font-size: .8em; }
+/* 数式は折り返さず、狭い画面では枠内だけを横スクロールさせる */
+.intro-formula {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  overflow-x: auto;
+}
+.intro-formula code {
+  display: block;
+  background: transparent;
+  padding: 0;
+  font-size: .74rem;
+  color: #334155;
+  white-space: nowrap;
+}
+.intro-formula code + code { margin-top: 6px; }
+
 .layout {
   width: min(1420px, calc(100% - 32px));
   margin: 0 auto 70px;
@@ -170,6 +208,9 @@ footer { padding: 30px 20px 50px; color: #98a2b3; text-align: center; font-size:
   .hero { padding-top: 34px; }
   .layout { width: min(100% - 18px, 1420px); }
   .controls-grid, .explain-grid { grid-template-columns: 1fr 1fr; }
+  /* 3項目を横並びにすると1項目あたりが狭くなりすぎるため縦積みにする */
+  .intro-grid { grid-template-columns: 1fr; gap: 18px; }
+  .intro { padding: 18px; }
   .viz-header { align-items: start; flex-direction: column; }
   .equation-strip { grid-template-columns: 1fr; }
   .key-idea { grid-column: auto; }

@@ -46,6 +46,51 @@
       <div class="concept-chain" aria-label="学習の流れ">
         <span>Brown運動</span><b>→</b><span>Langevin</span><b>→</b><span>確率分布</span><b>→</b><span>score</span><b>→</b><span>reverse diffusion</span>
       </div>
+
+      <!--
+        このページの位置づけを最初に示す枠。拡散モデルの定義・本デモの役割・
+        実際のモデルとの差（scoreを推定するか学習するか）の3点で構成する。
+      -->
+      <section class="intro card" aria-label="このページについて">
+        <h2>このページについて</h2>
+        <p class="intro-sub">拡散モデルの中心にある <code>score</code> を、1次元の粒子シミュレーションで見えるようにする教材です。</p>
+
+        <div class="intro-grid">
+          <article class="intro-item intro-what">
+            <h3>拡散モデルとは</h3>
+            <p>
+              データ分布に少しずつノイズを加え、既知のガウス分布へ潰していく forward SDE を設計します。
+              その各時刻の<strong>周辺分布のスコア</strong> <code>∇ₓ log pₜ(x)</code> を学習し、
+              逆時間SDEでガウス分布からデータ分布へ積分し戻す — これが骨格です。
+            </p>
+            <div class="intro-formula">
+              <code>forward : dXₜ = f(Xₜ,t)dt + g(t)dWₜ  ⟶  p_T ≈ N(0, I)</code>
+              <code>reverse : dXₜ = [f(Xₜ,t) − g(t)² sₜ(Xₜ)]dt + g(t)dW̄ₜ</code>
+            </div>
+          </article>
+
+          <article class="intro-item intro-role">
+            <h3>このページの役割</h3>
+            <p>
+              score が「何を見ている量なのか」を可視化します。
+              <strong>SDEが動かすのは個々の粒子</strong>、
+              <strong>score が参照するのは粒子集団が作る分布 <code>pₜ(x)</code></strong>。
+              この2つの層は混同されやすいので、同じ画面に並べて同時に観察できるようにしました。
+              score は粒子の履歴を一切参照しません。
+            </p>
+          </article>
+
+          <article class="intro-item intro-caveat">
+            <h3>本物のモデルとの違い</h3>
+            <p>
+              このデモは粒子集団から <code>pₜ(x)</code> を推定し、<code>log pₜ(x)</code> を数値微分して score を求めています。
+              <strong>1次元だからできる方法</strong>です。
+              実際の拡散モデルは密度を推定しません。「加えたノイズを当てる」回帰
+              （denoising score matching）で、score をニューラルネットに学習させます。
+            </p>
+          </article>
+        </div>
+      </section>
     </div>
   </header>
 
