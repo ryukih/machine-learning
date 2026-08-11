@@ -93,6 +93,9 @@ h1 { margin: 0; font-size: clamp(2.3rem, 6vw, 5rem); line-height: 1; letter-spac
 .intro-role h3 { color: var(--cyan); }
 .intro-caveat h3 { color: var(--orange); }
 .intro-item p { margin: 0; font-size: .85rem; line-height: 1.8; color: #475467; }
+/* 本筋の補足。読み飛ばせるよう一段小さく薄くする。
+   .intro-item p と詳細度を揃えたうえで後ろに置き、上書きさせている。 */
+.intro-item .intro-note { margin-top: 12px; font-size: .78rem; color: var(--muted); }
 .intro-item strong { color: #101828; }
 .intro-item code { font-size: .8em; }
 /* 数式は折り返さず、狭い画面では枠内だけを横スクロールさせる */
