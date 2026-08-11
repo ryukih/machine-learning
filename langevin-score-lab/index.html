@@ -1,0 +1,226 @@
+<!doctype html>
+<!--
+  =============================================================================
+  Langevin & Score Lab — ページ構造
+  =============================================================================
+
+  【このファイルの目的】
+    教材ページの静的な骨組みを定義する。数値計算と描画は app.js、
+    見た目は style.css が担当し、ここには計算に関わる値を書かない。
+
+  【app.js との対応】
+    - 操作系の要素は id で app.js から参照される（primaryBtn, resetBtn,
+      各スライダー, simCanvas など）。id を変更する場合は
+      app.js 冒頭の ui オブジェクトも合わせて修正すること。
+    - 操作ボタンは primaryBtn と resetBtn の2つだけである。primaryBtn は
+      「再生 / 一時停止 / 次のSTEPへ / scoreで戻す / もう一度」を状態に応じて
+      切り替える単一のボタンで、判定は app.js の resolvePrimaryAction() にある。
+    - レッスンの見出し・本文・スライダー初期値は app.js の lessons 配列が
+      唯一の情報源であり、起動時に applyLesson() が流し込む。
+      したがって各 input の value 属性は表示の初期値にすぎない。
+
+  【canvas の座標系】
+    width / height 属性（1200 x 760）が app.js の描画コードが前提とする
+    論理座標系のサイズを定める。実際のバッキングストアは
+    devicePixelRatio 倍に拡大されるため、この属性値は表示画素数ではない。
+    CSS 側で width:100% / height:auto として縦横比を保ったまま伸縮させる。
+  =============================================================================
+-->
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Brown運動からLangevin方程式、確率分布、score、reverse diffusionまでを粒子シミュレーションで学ぶ1次元教材" />
+  <title>Langevin & Score Lab</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow">Interactive SDE Playground</p>
+      <h1>Langevin &amp; Score Lab</h1>
+      <p class="lead">
+        SDEで動くのは<strong>個々の粒子</strong>。scoreが見ているのは、粒子集団が作る<strong>確率分布</strong>。
+        Brown運動から reverse diffusion までを、同じ画面でつなげて観察します。
+      </p>
+      <div class="concept-chain" aria-label="学習の流れ">
+        <span>Brown運動</span><b>→</b><span>Langevin</span><b>→</b><span>確率分布</span><b>→</b><span>score</span><b>→</b><span>reverse diffusion</span>
+      </div>
+
+      <!--
+        このページの位置づけを最初に示す枠。拡散モデルの定義・本デモの役割・
+        実際のモデルとの差（scoreを推定するか学習するか）の3点で構成する。
+      -->
+      <section class="intro card" aria-label="このページについて">
+        <h2>このページについて</h2>
+        <p class="intro-sub">拡散モデルの中心にある <code>score</code> を、1次元の粒子シミュレーションで見えるようにする教材です。</p>
+
+        <div class="intro-grid">
+          <article class="intro-item intro-what">
+            <h3>拡散モデルとは</h3>
+            <p>
+              データ分布 <code>p₀(x)</code> から出たデータに少しずつノイズを加え、既知のガウス分布へ潰していく
+              forward SDE を設計します。その各時刻の<strong>周辺分布のスコア</strong>
+              <code>sₜ(x) = ∇ₓ log pₜ(x)</code> を学習し、
+              逆時間SDEでガウス分布から <code>p₀(x)</code> へ積分し戻す — これが骨格です。
+            </p>
+            <div class="intro-formula">
+              <code>forward : dXₜ = f(Xₜ,t)dt + g(t)dWₜ  ⟶  p_T ≈ N(0, I)</code>
+              <code>reverse : dXₜ = [f(Xₜ,t) − g(t)² sₜ(Xₜ)]dt + g(t)dW̄ₜ</code>
+            </div>
+          </article>
+
+          <article class="intro-item intro-role">
+            <h3>このページの役割</h3>
+            <p>
+              score が「何を見ている量なのか」を可視化します。
+              <strong>SDEが動かすのは個々の粒子</strong>、
+              <strong>score が参照するのは粒子集団が作る分布 <code>pₜ(x)</code></strong>。
+              この2つの層は混同されやすいので、同じ画面に並べて同時に観察できるようにしました。
+              score は粒子の履歴を一切参照しません。
+            </p>
+          </article>
+
+          <article class="intro-item intro-caveat">
+            <h3>本物のモデルとの違い</h3>
+            <p>
+              このデモは粒子集団から <code>pₜ(x)</code> を直接推定し、<code>log pₜ(x)</code> を数値微分して score を求めています。
+              <strong>1次元だからできる方法</strong>です。実際の拡散モデルは密度を推定しません。
+              ある <code>x₀</code> から出発した<strong>条件付き分布</strong> <code>pₜ(x|x₀)</code> はガウス分布として閉じた形で書けるので、
+              そのスコア <code>−ε/σₜ</code>（＝加えたノイズの符号違い）を教師信号にして回帰します。
+            </p>
+            <div class="intro-formula">
+              <code>pₜ(x) = ∫ pₜ(x|x₀) p₀(x₀) dx₀        ← 欲しい周辺分布</code>
+              <code>∇ₓ log pₜ(x|x₀) = −ε ⁄ σₜ            ← 閉じた形で書ける教師信号</code>
+            </div>
+            <p class="intro-note">
+              個々の教師信号は乱雑で周辺スコアとは似ていませんが、二乗誤差の最適予測子が条件付き期待値であるため、
+              多数の <code>x₀</code> にわたる回帰の結果が <code>∇ₓ log pₜ(x)</code> に一致します
+              （denoising score matching, Vincent 2011）。
+            </p>
+          </article>
+        </div>
+      </section>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="lesson-panel" aria-label="レッスン">
+      <h2>レッスン</h2>
+      <!--
+        各レッスンは applyLesson() で粒子・時刻・score履歴をすべて作り直すため、
+        技術的にはどのSTEPからでも単体で動く。順序は概念の積み上げによるもの。
+      -->
+      <p class="lesson-note">
+        STEPは<strong>概念が積み上がる順</strong>に並んでいます。Brown運動を見てから Langevin、
+        分布を見てから score、という流れです。
+        ただし各STEPは<strong>独立して動く</strong>ので、順番は必須ではありません。どこから始めても、何度戻っても構いません。
+      </p>
+      <div id="lessonButtons" class="lesson-buttons"></div>
+      <div id="lessonText" class="lesson-text"></div>
+    </aside>
+
+    <section class="main-panel">
+      <div class="toolbar card">
+        <div class="toolbar-row primary-controls">
+          <!--
+            主ボタンは1つだけ。ラベルと動作はシミュレーション状態から
+            app.js の resolvePrimaryAction() が決めるため、ここでの文字列は
+            初期表示（t=0・停止中）のものにすぎない。
+          -->
+          <button id="primaryBtn" class="button primary" type="button">▶ 再生</button>
+          <button id="resetBtn" class="button" type="button">↺ リセット</button>
+          <div class="status-pill" id="directionStatus">Forward</div>
+          <div class="time-readout">t = <span id="timeValue">0.00</span></div>
+        </div>
+
+        <div class="controls-grid">
+          <label>
+            <span>粒子数 N</span>
+            <input id="particleSlider" type="range" min="100" max="1400" step="100" value="600" />
+            <output id="particleValue">600</output>
+          </label>
+          <label>
+            <span>ノイズ σ</span>
+            <input id="noiseSlider" type="range" min="0.15" max="1.6" step="0.05" value="0.85" />
+            <output id="noiseValue">0.85</output>
+          </label>
+          <label>
+            <span>drift 強度 k</span>
+            <input id="driftSlider" type="range" min="0" max="1.5" step="0.05" value="0" />
+            <output id="driftValue">0.00</output>
+          </label>
+          <label>
+            <span>表示速度</span>
+            <input id="speedSlider" type="range" min="1" max="6" step="1" value="2" />
+            <output id="speedValue">2×</output>
+          </label>
+        </div>
+      </div>
+
+      <div class="equation-strip card" aria-live="polite">
+        <div>
+          <span class="label">現在のSDE</span>
+          <code id="sdeEquation">dXₜ = σ dWₜ</code>
+        </div>
+        <div>
+          <span class="label">score</span>
+          <code>sₜ(x) = ∂ₓ log pₜ(x)</code>
+        </div>
+        <div class="key-idea" id="keyIdea">各粒子は独立なBrown運動をします。</div>
+      </div>
+
+      <section class="viz-card card">
+        <div class="viz-header">
+          <div>
+            <h2>同期ビュー</h2>
+            <p>同じ粒子集団を「粒子」「分布」「score」の3つの見方で表示します。</p>
+          </div>
+          <div class="legend">
+            <span><i class="dot particle"></i>粒子</span>
+            <span><i class="dot density"></i>経験分布</span>
+            <span><i class="dot score"></i>score</span>
+          </div>
+        </div>
+        <canvas id="simCanvas" width="1200" height="760" aria-label="ランジュバン方程式のシミュレーション"></canvas>
+      </section>
+
+      <section class="explain-grid">
+        <article class="card explain-card">
+          <p class="number">1</p>
+          <h3>Particle view</h3>
+          <p>各点が1つの確率変数の実現値 <code>Xₜ⁽ⁱ⁾</code>。SDEはこの1粒子ごとの時間発展を記述します。</p>
+        </article>
+        <article class="card explain-card">
+          <p class="number">2</p>
+          <h3>Distribution view</h3>
+          <p>多数の粒子を同時に観察すると、集団の密度として <code>pₜ(x)</code> が現れます。</p>
+        </article>
+        <article class="card explain-card">
+          <p class="number">3</p>
+          <h3>Score view</h3>
+          <p><code>∂ₓ log pₜ(x)</code> は、その位置から「密度が高くなる方向」を示します。粒子の過去は参照しません。</p>
+        </article>
+      </section>
+
+      <section class="card reverse-note">
+        <h2>Reverse diffusion の見方</h2>
+        <p>
+          レッスン5では、まず Forward を進めて分布を拡散させてください。二峰構造が単峰へ潰れきったところで自動的に停止します。
+          Forward中は時刻ごとのscoreを保存しているので、その後 <strong>「⇠ score で戻す」</strong> を押すと、
+          現在の粒子を「保存した集団のscore」で高密度側へ戻します。これは各粒子の軌跡を逆再生しているわけではありません。
+        </p>
+        <div class="formula-box">
+          backward step: <code>Xₜ₋Δₜ ≈ Xₜ + [−f(Xₜ,t) + σ² sₜ(Xₜ)]Δt + σ√Δt ξ</code>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer>
+    <p>Pure HTML + Canvas + JavaScript. No build step, no external library.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
