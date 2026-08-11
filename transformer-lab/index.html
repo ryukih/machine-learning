@@ -100,9 +100,9 @@
               次元も <code>d_model = 4</code>, <code>d_k = 2</code> と極端に小さく、head も1つだけです。
             </p>
             <p class="intro-note">
-              実際のモデルは <code>d_model</code> が数百〜数千、head が数十あり、
-              各軸に人間が読める意味はありません。この教材が軸に「人」「動作」などの名前を
-              付けているのは、数字の動きを言葉で追えるようにするための便宜です。
+              実際のモデルは <code>d_model</code> が数百〜数千、head が数十あります。
+              また、<code>q</code>・<code>k</code>・<code>v</code> の各軸に人間が読める意味はありません。
+              このページも軸に意味を持たせず「軸1」「軸2」と番号でだけ呼びます。
             </p>
           </article>
         </div>
@@ -167,10 +167,22 @@
       <p>
         文のトークン数を <code>n = 4</code>、埋め込みの次元を <code>d_model</code> として、
         入力を行列 <code>X ∈ ℝ^(n×d_model)</code> に並べます。<strong>行が1つの語</strong>です。
+        このページでは <code>X</code> を<strong>単位行列</strong>にしています。
+        第 <code>t</code> 軸は「その語が <code>t</code> 番目の語かどうか」だけを表し、
+        それ以外の意味を持ちません。
       </p>
       <div class="formula-block">
-        <code>X = [ x_I ; x_like ; x_playing ; x_football ]     ← 各行が1語の埋め込み（+ 位置情報）</code>
+        <code>          I  like play foot</code>
+        <code>x_I        = [ 1,  0,  0,  0 ]</code>
+        <code>x_like     = [ 0,  1,  0,  0 ]</code>
+        <code>x_playing  = [ 0,  0,  1,  0 ]</code>
+        <code>x_football = [ 0,  0,  0,  1 ]</code>
       </div>
+      <p>
+        こうしておくと <code>x_t W</code> は「<code>W</code> の第 <code>t</code> 行を取り出す」ことと同じになります。
+        つまり <strong><code>W^Q</code> の <code>playing</code> 行が、そのまま <code>playing</code> の query</strong> です。
+        実際のモデルの埋め込み表引きも、内部的にはこれと同じ演算です。
+      </p>
 
       <p>まず、同じ <code>X</code> を3通りに線形射影します。</p>
       <div class="formula-block">
@@ -254,7 +266,10 @@
         <article class="card step">
           <p class="step-number">STEP 1</p>
           <h3>この語の query を作る</h3>
-          <p class="step-lead">埋め込みに <code>W^Q</code> を掛けて、<strong>この語が何を探しているか</strong>を取り出します。</p>
+          <p class="step-lead">
+            埋め込みに <code>W^Q</code> を掛けて、<strong>この語が何を探しているか</strong>を取り出します。
+            <code>x</code> は one-hot なので、この掛け算は <code>W^Q</code> から1行を引くのと同じです。
+          </p>
           <div id="queryStep"></div>
         </article>
 
@@ -297,9 +312,10 @@
           <div id="vectorCompare"></div>
           <p class="result-reading" id="resultReading"></p>
           <p class="step-note">
-            <code>x</code> と <code>z</code> は軸の意味が違います（<code>z</code> は value 空間の住人です）。
-            実際のモデルはこのあと <code>W^O</code> で元の <code>d_model</code> 次元へ戻し、
-            残差接続で <code>x</code> に足し込みます。下の「この計算のあとに起きること」を参照してください。
+            <code>x</code> は「その語かどうか」だけの軸、<code>z</code> は value 空間の軸で、
+            住んでいる空間が違います。実際のモデルはこのあと <code>W^O</code> で
+            元の <code>d_model</code> 次元へ戻し、残差接続で <code>x</code> に足し込みます。
+            下の「この計算の前後に起きること」を参照してください。
           </p>
         </article>
       </div>
@@ -311,10 +327,13 @@
         </div>
         <div id="parameterTables" class="param-tables"></div>
         <p class="params-note">
-          <code>X</code> は「語そのものの埋め込み」に「位置符号」を足したものです。
-          位置符号は本来すべての次元へ異なる周期の正弦波として書き込まれますが、
-          ここでは追えるように<strong>位置専用の軸を1本だけ置いて</strong>、
-          位置が1つ進むごとに <code>0.25</code> を足す形に簡略化しています。
+          <code>X</code> が単位行列なので、<code>Q</code>, <code>K</code>, <code>V</code> は
+          それぞれ <code>W^Q</code>, <code>W^K</code>, <code>W^V</code> と<strong>同じ表になります</strong>。
+          行列の掛け算が表引きに退化しているだけで、式は何も変わっていません。
+          一方 <code>V</code> の各行は one-hot ではありません。
+          <strong><code>v_j ≠ x_j</code> であること</strong>が、
+          「重みが掛かる先は <code>V</code> であって埋め込みではない」の具体的な中身です。
+          なお、このページは位置符号を足していません（次節を参照）。
         </p>
       </section>
     </section>
@@ -328,26 +347,35 @@
         4語すべてを順にクリックすると、同じ計算が4回行われて4本の <code>z</code> が並びます。
         既定の設定では、次のような読み方になります。
       </p>
+      <p>
+        入る前の <code>x</code> は、どれも<strong>自分の軸だけが 1</strong> の、周りを何も知らないベクトルでした。
+        出てきた <code>z</code> は、<strong>4本の <code>v</code> を配分どおりに混ぜたベクトル</strong>です。
+        この違いが「文脈が反映された」という言い方の中身です。
+      </p>
       <ul class="reading-list">
-        <li><b>I</b> は述語を探すので <code>like</code> を最も強く見ます。その結果 <code>z_I</code> には、
-          <code>I</code> 単体には無かった「行為」と「好意」の成分が入ります。
-          「私」が<strong>何をしていて、どう感じているか</strong>を吸い上げた形です。</li>
-        <li><b>like</b> は目的語を探すので、最も「対象らしい」<code>football</code> を強く見ます。
-          文法的には <code>like playing</code> と結びついてほしいところですが、
-          この head は「対象らしさ」しか見ていないのでこうなります。
-          <strong>1つの head に全部の関係を担わせないこと</strong>が、head を複数持つ理由です。</li>
-        <li><b>playing</b> は目的語を探し、<code>football</code> を最も強く見ます。
-          <code>z_playing</code> では「話題」の成分が「行為」を上回ります。
-          <code>playing</code> 単体は「動作」でしたが、文脈を通すと
-          <strong>「football についての動作」</strong>になった、と読めます。</li>
-        <li><b>football</b> は述語を探し、<code>playing</code> を最も強く見ます。
-          <code>z_football</code> には「行為」と「好意」が入り、
-          <strong>「プレーされていて、好かれている football」</strong>になります。</li>
+        <li><b>I</b> は述語を探すので <code>like</code> を <code>0.730</code> 参照します（主語 → 述語）。
+          <code>z_I = 0.125·v_I + 0.730·v_like + 0.125·v_playing + 0.021·v_football</code>。
+          中身の 73% が <code>like</code> から来ています。</li>
+        <li><b>like</b> は目的語を探すので <code>playing</code> を <code>0.730</code> 参照します（動詞 → 目的語）。
+          <code>I like playing</code> の結びつきがそのまま数字に出ています。</li>
+        <li><b>playing</b> も目的語を探し、<code>football</code> を <code>0.730</code> 参照します。
+          <code>z_playing</code> は <code>v_football</code> が支配的な混合になります。
+          <strong>同じ <code>playing</code> でも、後ろが <code>tennis</code> なら別のベクトルになります。</strong></li>
+        <li><b>football</b> は述語を探し、<code>playing</code> を <code>0.651</code> 参照します（目的語 → 述語）。
+          自分自身も <code>0.242</code> 残るので、<code>z_football</code> は
+          「<code>playing</code> 寄りに引かれた <code>football</code>」になります。</li>
       </ul>
+      <p>
+        <strong>因果マスクを入れて <code>playing</code> をもう一度見てください。</strong>
+        <code>football</code> が見えなくなるので配分が <code>[0.461, 0.079, 0.461, 0]</code> に変わり、
+        <code>z_playing</code> も別のベクトルになります。
+        語は同じでも、参照できる文脈が変われば <code>z</code> は変わる — これが最も直接的な確認方法です。
+      </p>
       <p class="reading-note">
-        <code>like</code> の行が文法どおりにならないことを隠していないのは、
-        この <code>W^Q</code>, <code>W^K</code> が学習の結果ではなく手書きだからです。
-        本物のモデルはこの配線をデータから決めます。
+        4行とも文法的に自然な参照先になっていますが、これは <code>W^Q</code>, <code>W^K</code> を
+        そうなるように手で書いたからです。本物のモデルはこの配線をデータから学習します。
+        また、ここでは1つの head が4つの関係すべてを担っています。
+        実際には head ごとに別の関係を拾わせるので、1つの head の行がきれいに文法と一致するとは限りません。
       </p>
     </section>
 
@@ -363,13 +391,20 @@
           <h3>前: positional encoding</h3>
           <p>
             attention は<strong>語順を見ません</strong>。入力の行を並べ替えると出力の行も同じように
-            並べ替わるだけで（置換同変）、値そのものは変わりません。
+            並べ替わるだけで（置換同変）、各語の <code>z</code> は変わりません。
             <code>playing</code> が <code>football</code> の前にある、という情報は
             attention ではなく<strong>埋め込みに足し込まれた位置符号</strong>が運びます。
           </p>
           <div class="formula-block small">
             <code>x_t = e(token_t) + p(t)</code>
           </div>
+          <p class="context-caveat">
+            <b>このページでは <code>p(t)</code> を足していません。</b>
+            4語は埋め込みが互いに違うので、足さなくても区別はつきます。
+            足していない影響は、<code>football playing like I</code> と並べ替えても
+            各語の <code>z</code> がまったく同じになることです。
+            語順を扱うには位置符号が要る、というのはこの意味です。
+          </p>
         </article>
 
         <article class="context-item">

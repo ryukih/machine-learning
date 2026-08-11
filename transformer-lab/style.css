@@ -480,6 +480,16 @@ h3 { font-size: 1rem; letter-spacing: -.01em; }
 .context-item { padding-top: 12px; border-top: 3px solid var(--line); }
 .context-item h3 { margin: 0 0 6px; color: var(--green); }
 .context-item p { margin: 0; font-size: .88rem; }
+/* このページが本物と違う点の断り書き。本文と区別できるよう一段落として囲む。 */
+.context-caveat {
+  margin-top: 10px !important;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(234,88,12,.08);
+  border-left: 3px solid var(--orange);
+  font-size: .84rem !important;
+}
+.context-caveat b { color: var(--orange); }
 
 /* ---- つまずきやすい点 -------------------------------------------------- */
 .pitfall-list { margin: 14px 0 0; }

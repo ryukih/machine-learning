@@ -18,6 +18,17 @@
  *
  *       Q = X W^Q,   K = X W^K,   V = X W^V
  *
+ * 【埋め込みの規約 — このページの中心的な単純化】
+ *   埋め込み X を単位行列（one-hot）にしている。すなわち d_model の第 t 軸は
+ *   「その語が t 番目の語かどうか」だけを表し、それ以外の意味を持たない。
+ *
+ *       x_I = [1,0,0,0]  x_like = [0,1,0,0]  x_playing = [0,0,1,0]  x_football = [0,0,0,1]
+ *
+ *   こうすると x_t W は「W の第 t 行を取り出す」ことと等しくなるので、
+ *   W^Q / W^K / W^V の各行が、そのまま語 t の query / key / value になる。
+ *   実際のモデルの埋め込み表引きも、内部的にはこれと同じ演算である。
+ *   軸に「人」「動作」のような人工的な意味を割り当てないための選択でもある。
+ *
  * 【行列の向きの規約】
  *   すべての行列は「行 = トークン」で持つ。したがって x_t, q_t, k_t, v_t は
  *   いずれも行ベクトルであり、射影は右から掛ける（q_t = x_t W^Q）。
@@ -33,11 +44,16 @@
  *   次元は MODEL_DIMENSIONS に、各軸が表す意味は *_AXIS_LABELS に集約している。
  *
  * 【重みの出どころ — 重要】
- *   TOKEN_CONTENT_EMBEDDINGS / QUERY_WEIGHTS / KEY_WEIGHTS / VALUE_WEIGHTS は
+ *   QUERY_WEIGHTS / KEY_WEIGHTS / VALUE_WEIGHTS は
  *   学習で得た値ではない。読者が電卓で追える大きさに収め、かつ
  *   「主語は述語を探す」「動詞は目的語を探す」という関係が現れるように、
  *   人手で書き込んだ値である。本物のモデルはこれをデータから学習する。
  *   ここで示したいのは値そのものではなく、値がどう流れて文脈ベクトルになるかである。
+ *
+ * 【q / k / v の軸に名前を付けていない理由】
+ *   実際のモデルでは、これらの空間の各軸に人間が読める意味はない。意味を持つのは
+ *   軸ではなく、内積の大小（＝どれだけ参照するか）と、混ざった結果のベクトルである。
+ *   したがって軸は「軸1」「軸2」と番号でだけ呼ぶ。
  *
  * 【index.html との対応】
  *   参照する要素の id は ELEMENT_IDS に集約している。HTML 側で id を変えるときは
@@ -55,7 +71,7 @@
 
 /** 各表現の次元数。d_model は埋め込み、d_k は query/key、d_v は value の次元。 */
 const MODEL_DIMENSIONS = {
-  embedding: 4, // d_model : 入力埋め込みの次元
+  embedding: 4, // d_model : 入力埋め込みの次元。X を one-hot にしているのでトークン数と等しい
   key: 2,       // d_k     : query と key が住む空間の次元（両者は同じでなければ内積が取れない）
   value: 4,     // d_v     : value の次元。ここでは比較しやすいよう d_model と同じにしている
 };
@@ -63,63 +79,64 @@ const MODEL_DIMENSIONS = {
 /** 例文のトークン列。実際のトークナイザは "." も1トークンにするが、ここでは4語に簡略化する。 */
 const SENTENCE_TOKENS = ['I', 'like', 'playing', 'football'];
 
-/** 埋め込み空間 d_model の各軸に与えた意味。軸に意味を付けるのは教材上の都合であり、
- *  本物のモデルの各軸は人間に読める意味を持たない。 */
-const EMBEDDING_AXIS_LABELS = ['人', '動作', 'もの', '位置'];
+/** 埋め込み空間 d_model の各軸のラベル。第 t 軸は「その語が t 番目の語かどうか」を表すので、
+ *  軸の名前はトークンそのものになる。抽象的な意味づけを一切置かないための設計である。 */
+const EMBEDDING_AXIS_LABELS = SENTENCE_TOKENS;
 
-/** query 空間 d_k の各軸。「この語が何を探しているか」を表す。 */
-const QUERY_AXIS_LABELS = ['探: 動作', '探: 対象'];
+/** query と key が共有する空間 d_k の各軸。両者は同じ空間に住まないと内積が取れない。
+ *  この軸に人間が読める意味はないので、番号でだけ呼ぶ。 */
+const SCORE_SPACE_AXIS_LABELS = ['軸1', '軸2'];
 
-/** key 空間 d_k の各軸。「この語が何として差し出されるか」を表す。
- *  query と key は同じ空間に住み、内積で噛み合いを測る。 */
-const KEY_AXIS_LABELS = ['動作性', '対象性'];
+/** value 空間 d_v の各軸。ここも意味を持たせず番号で呼ぶ。 */
+const VALUE_AXIS_LABELS = ['軸1', '軸2', '軸3', '軸4'];
 
-/** value 空間 d_v の各軸。「この語が文脈へ差し出す中身」を表す。 */
-const VALUE_AXIS_LABELS = ['話し手', '行為', '話題', '好意'];
-
-/** 位置を含まない語そのものの埋め込み（token embedding）。軸は EMBEDDING_AXIS_LABELS の順。
- *  playing は「動作」でありながら球技という「もの」寄りの成分も持つ、という設計にしている。 */
-const TOKEN_CONTENT_EMBEDDINGS = {
-  I:        [1.0, 0.0, 0.0, 0.0],
-  like:     [0.0, 1.0, 0.0, 0.0],
-  playing:  [0.0, 1.0, 0.5, 0.0],
-  football: [0.0, 0.0, 1.0, 0.0],
+/**
+ * 埋め込み X の各行。単位行列（one-hot）にしている。
+ * 語そのもの以外の情報を持たない、最小の埋め込みである。
+ * この形にすると x_t W = 「W の第 t 行」となるので、下の3つの重み行列は
+ * そのまま「語ごとの query / key / value の一覧表」として読める。
+ */
+const TOKEN_EMBEDDINGS = {
+  I:        [1, 0, 0, 0],
+  like:     [0, 1, 0, 0],
+  playing:  [0, 0, 1, 0],
+  football: [0, 0, 0, 1],
 };
 
-/** 位置符号を書き込む軸の番号と、位置 t に掛ける係数。
- *  本物の positional encoding は全次元に異なる周期の正弦波を書き込むが、
- *  ここでは手で追えるように「位置専用の軸を1本置き、そこへ t を線形に書く」形に簡略化する。 */
-const POSITION_AXIS_INDEX = 3;
-const POSITION_ENCODING_STEP = 0.25; // 位置が1つ進むごとに位置軸へ足す量
-
-/** W^Q : 埋め込み → query。行が EMBEDDING_AXIS_LABELS、列が QUERY_AXIS_LABELS に対応する。
- *  「人」「もの」の行が探: 対象に負の値を持つのは、名詞が「述語を探す」一方で
- *  「目的語を探しはしない」ことを表す。内積が負になる（＝積極的に見ない）配線は
- *  学習済みモデルでも普通に現れる。 */
+/**
+ * W^Q : 埋め込み → query。X が one-hot なので、第 t 行がそのまま語 t の query である。
+ * 「どの語を探しに行くか」を、その語の key と同じ向きを指すベクトルとして書き込んである。
+ * 大きさ 2.5 は softmax の鋭さを決める。大きいほど1語に集中する。
+ */
 const QUERY_WEIGHTS = [
-  [1.6, -0.4], // 人   : 述語を探す。目的語は探さない
-  [0.0,  1.6], // 動作 : 目的語を探す
-  [1.6, -0.4], // もの : 述語を探す
-  [0.0,  1.2], // 位置 : 後方の語ほど対象を強く探す。位置が query に効くことを示すために置く
+  [ 0.0,  2.5], // I        : like の key の向きを指す（主語 → 述語）
+  [-2.5,  0.0], // like     : playing の key の向きを指す（動詞 → 目的語）
+  [ 0.0, -2.5], // playing  : football の key の向きを指す（動詞 → 目的語）
+  [-2.2, -0.8], // football : playing を指しつつ like からは離す（目的語 → 述語）
 ];
 
-/** W^K : 埋め込み → key。行が EMBEDDING_AXIS_LABELS、列が KEY_AXIS_LABELS に対応する。
- *  「人」の対象性を 0.4 と小さくしてあるのは、人は目的語になりにくい（"playing I" は非文）ため。 */
+/**
+ * W^K : 埋め込み → key。第 t 行がそのまま語 t の key である。
+ * 4語を平面上の 0°, 90°, 180°, 270° に置いて、互いに区別できるようにしている。
+ * 直交する組の内積は 0、反対向きの組は負になる。
+ */
 const KEY_WEIGHTS = [
-  [0.0, 0.4], // 人   : 対象としては弱い
-  [1.0, 0.0], // 動作 : 動作として差し出す
-  [0.0, 1.6], // もの : 対象として強く差し出す
-  [0.0, 0.0], // 位置 : key には効かせない
+  [ 1.0,  0.0], // I        :   0°
+  [ 0.0,  1.0], // like     :  90°
+  [-1.0,  0.0], // playing  : 180°
+  [ 0.0, -1.0], // football : 270°
 ];
 
-/** W^V : 埋め込み → value。行が EMBEDDING_AXIS_LABELS、列が VALUE_AXIS_LABELS に対応する。
- *  対角行列にしていないのが重要で、value は埋め込みそのものではなく、
- *  「文脈へ渡すために組み替えられた別の表現」であることを示している。 */
+/**
+ * W^V : 埋め込み → value。第 t 行がそのまま語 t の value である。
+ * 単位行列にしていないことが重要で、v_t は one-hot の x_t とは別のベクトルになる。
+ * これが「重みが掛かる先は V であって埋め込み X ではない」ということの中身である。
+ */
 const VALUE_WEIGHTS = [
-  [1.0, 0.0, 0.0, 0.2], // 人   : 話し手を伝え、わずかに好意の色も持つ
-  [0.0, 1.0, 0.3, 0.8], // 動作 : 行為を伝え、話題と好意にも寄与する
-  [0.0, 0.2, 1.0, 0.0], // もの : 話題を伝える
-  [0.0, 0.0, 0.0, 0.0], // 位置 : value には効かせない
+  [1.0, 0.2, 0.0, 0.0], // I
+  [0.0, 1.0, 0.4, 0.0], // like
+  [0.0, 0.3, 1.0, 0.5], // playing
+  [0.6, 0.0, 0.2, 1.0], // football
 ];
 
 /** 各トークンに割り当てる表示色。CSS の :root と手動で同期させている。 */
@@ -199,18 +216,13 @@ function softmax(scores) {
  * 3. attention の計算（純関数）
  * ========================================================================= */
 
-/** 位置 position の positional encoding。位置専用の軸にだけ値を書き込む。 */
-function buildPositionEncoding(position) {
-  const encoding = new Array(MODEL_DIMENSIONS.embedding).fill(0);
-  encoding[POSITION_AXIS_INDEX] = POSITION_ENCODING_STEP * position;
-  return encoding;
-}
-
-/** 入力行列 X を作る。X の各行は「語の意味 + その語の位置」である。 */
+/**
+ * 入力行列 X を作る。各行は語そのものを表す one-hot ベクトルである。
+ * 本物のモデルはここへさらに positional encoding を足すが、このページでは足していない。
+ * 足さない影響は「語順の情報が入らない」ことで、その意味は解説側で述べている。
+ */
 function buildInputVectors() {
-  return SENTENCE_TOKENS.map((token, position) =>
-    addVectors(TOKEN_CONTENT_EMBEDDINGS[token], buildPositionEncoding(position))
-  );
+  return SENTENCE_TOKENS.map((token) => TOKEN_EMBEDDINGS[token].slice());
 }
 
 /**
@@ -388,15 +400,16 @@ function renderMatrixCaption(pass) {
 
 /** STEP1: 注目している語の query を表示する。 */
 function renderQueryStep(pass) {
+  const token = SENTENCE_TOKENS[state.focusTokenIndex];
   const index = state.focusTokenIndex;
   ui.queryStep.innerHTML = '';
   ui.queryStep.appendChild(createElement('p', 'step-formula',
-    `x_${SENTENCE_TOKENS[index]} = ${formatVector(pass.inputVectors[index], DISPLAY_DIGITS.vector)}` +
-    `   （軸: ${EMBEDDING_AXIS_LABELS.join(' / ')}）`));
+    `x_${token} = ${formatVector(pass.inputVectors[index], DISPLAY_DIGITS.vector)}` +
+    `   （軸: ${EMBEDDING_AXIS_LABELS.join(' / ')}） ← ${index + 1}番目の軸だけが 1`));
   ui.queryStep.appendChild(createElement('p', 'step-formula',
-    `q_${SENTENCE_TOKENS[index]} = x_${SENTENCE_TOKENS[index]} W^Q = ` +
-    `${formatVector(pass.queryVectors[index], DISPLAY_DIGITS.vector)}`));
-  ui.queryStep.appendChild(createVectorChips(pass.queryVectors[index], QUERY_AXIS_LABELS, true));
+    `q_${token} = x_${token} W^Q = ${formatVector(pass.queryVectors[index], DISPLAY_DIGITS.vector)}` +
+    `   ← W^Q の ${token} 行そのもの`));
+  ui.queryStep.appendChild(createVectorChips(pass.queryVectors[index], SCORE_SPACE_AXIS_LABELS, false));
 }
 
 /** STEP2/3 の表。1行が「相手の語 j」に対応し、内積から配分までを横に並べる。 */
@@ -481,35 +494,37 @@ function createComparisonBlock(title, vector, axisLabels) {
   return block;
 }
 
-/** 結果の読み方を1文で述べる。最も強く見た語と、文脈ベクトルで最も強くなった軸を挙げる。 */
+/** 結果の読み方を1文で述べる。何をどれだけ参照し、その結果 z が何の混合になったかを言う。 */
 function renderResultReading(pass) {
   const index = state.focusTokenIndex;
   const focusToken = SENTENCE_TOKENS[index];
-  const mostAttendedToken = SENTENCE_TOKENS[argumentMaximum(pass.attentionWeights[index])];
-  const strongestAxis = VALUE_AXIS_LABELS[argumentMaximum(pass.contextVectors[index])];
+  const topIndex = argumentMaximum(pass.attentionWeights[index]);
+  const topWeight = pass.attentionWeights[index][topIndex];
+  const topPercent = Math.round(topWeight * 100);
   ui.resultReading.textContent =
-    `"${focusToken}" は "${mostAttendedToken}" を最も強く参照し、` +
-    `その結果 z_${focusToken} では「${strongestAxis}」の成分が最大になりました。` +
-    `同じ "${focusToken}" でも、周りの語が変われば z は別のベクトルになります。`;
+    `x_${focusToken} は "${focusToken}" の軸だけが 1 の、周りを何も知らないベクトルでした。` +
+    `attention を通すと "${SENTENCE_TOKENS[topIndex]}" を最も強く（${topPercent}%）参照し、` +
+    `z_${focusToken} は4本の value をその配分で混ぜたベクトルになります。` +
+    `因果マスクを入れて見比べてください。参照できる語が変われば z も変わります。`;
 }
 
 /** 使っているパラメータをすべて表にして最後に置く。値を隠さないことが教材の前提である。 */
 function renderParameterTables(pass) {
   ui.parameterTables.innerHTML = '';
   ui.parameterTables.appendChild(createMatrixTable(
-    'X : 入力（token embedding + positional encoding）', SENTENCE_TOKENS, EMBEDDING_AXIS_LABELS, pass.inputVectors));
+    'X : 入力（one-hot 埋め込み）', SENTENCE_TOKENS, EMBEDDING_AXIS_LABELS, pass.inputVectors));
   ui.parameterTables.appendChild(createMatrixTable(
-    'W^Q : 埋め込み → query', EMBEDDING_AXIS_LABELS, QUERY_AXIS_LABELS, QUERY_WEIGHTS));
+    'W^Q : 語ごとの query 一覧', EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, QUERY_WEIGHTS));
   ui.parameterTables.appendChild(createMatrixTable(
-    'W^K : 埋め込み → key', EMBEDDING_AXIS_LABELS, KEY_AXIS_LABELS, KEY_WEIGHTS));
+    'W^K : 語ごとの key 一覧', EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, KEY_WEIGHTS));
   ui.parameterTables.appendChild(createMatrixTable(
-    'W^V : 埋め込み → value', EMBEDDING_AXIS_LABELS, VALUE_AXIS_LABELS, VALUE_WEIGHTS));
+    'W^V : 語ごとの value 一覧', EMBEDDING_AXIS_LABELS, VALUE_AXIS_LABELS, VALUE_WEIGHTS));
   ui.parameterTables.appendChild(createMatrixTable(
-    'Q = X W^Q', SENTENCE_TOKENS, QUERY_AXIS_LABELS, pass.queryVectors));
+    'Q = X W^Q（X が one-hot なので W^Q と一致）', SENTENCE_TOKENS, SCORE_SPACE_AXIS_LABELS, pass.queryVectors));
   ui.parameterTables.appendChild(createMatrixTable(
-    'K = X W^K', SENTENCE_TOKENS, KEY_AXIS_LABELS, pass.keyVectors));
+    'K = X W^K（同上）', SENTENCE_TOKENS, SCORE_SPACE_AXIS_LABELS, pass.keyVectors));
   ui.parameterTables.appendChild(createMatrixTable(
-    'V = X W^V', SENTENCE_TOKENS, VALUE_AXIS_LABELS, pass.valueVectors));
+    'V = X W^V（同上。x とは別のベクトルであることに注意）', SENTENCE_TOKENS, VALUE_AXIS_LABELS, pass.valueVectors));
 }
 
 /** 行ラベル・列ラベル付きの行列表を1つ作る。 */
