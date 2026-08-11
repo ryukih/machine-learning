@@ -93,6 +93,14 @@ h1 { margin: 0; font-size: clamp(2.3rem, 6vw, 5rem); line-height: 1; letter-spac
 }
 .lesson-panel { position: sticky; top: 16px; padding: 16px; }
 .lesson-panel h2 { margin: 4px 8px 12px; font-size: 1rem; }
+/* レッスン一覧の上に置く、順序についての注記 */
+.lesson-note {
+  margin: 0 8px 14px;
+  font-size: .76rem;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.lesson-note strong { color: #475467; font-weight: 750; }
 .lesson-buttons { display: grid; gap: 7px; }
 .lesson-btn {
   width: 100%; text-align: left; border: 1px solid transparent; background: transparent;

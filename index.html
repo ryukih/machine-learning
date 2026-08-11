@@ -52,6 +52,15 @@
   <main class="layout">
     <aside class="lesson-panel" aria-label="レッスン">
       <h2>レッスン</h2>
+      <!--
+        各レッスンは applyLesson() で粒子・時刻・score履歴をすべて作り直すため、
+        技術的にはどのSTEPからでも単体で動く。順序は概念の積み上げによるもの。
+      -->
+      <p class="lesson-note">
+        STEPは<strong>概念が積み上がる順</strong>に並んでいます。Brown運動を見てから Langevin、
+        分布を見てから score、という流れです。
+        ただし各STEPは<strong>独立して動く</strong>ので、順番は必須ではありません。どこから始めても、何度戻っても構いません。
+      </p>
       <div id="lessonButtons" class="lesson-buttons"></div>
       <div id="lessonText" class="lesson-text"></div>
     </aside>
