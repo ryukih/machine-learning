@@ -9,22 +9,22 @@
  *   数式の各記号が、どの数字に対応しているかを目で追えるようにするのが狙いである。
  *
  * 【描画の順序 — index.html の一本道に合わせる】
- *   ページは 01 → 08 の一方向に進む構成であり、このファイルもその順に描く。
+ *   ページは 01 → 09 の一方向に進む構成であり、このファイルもその順に描く。
  *
- *       04  renderProjectionSection 使う行列（X, W^K, W^Q, W^V）を、平面の図と交互に開示する
- *       05  renderQueryStep         STEP1 : q を1本作る
+ *       05  renderProjectionSection 使う行列（X, W^K, W^Q, W^V）を、平面の図と交互に開示する
+ *       06  renderQueryStep         STEP1 : x の特徴で W^Q の行を混ぜ、q を1本作る
  *           renderScoreStep         STEP2 : q と4つの k を1枚の平面に重ね、内積を取る
  *           renderSoftmaxStep       STEP3 : softmax の中身（exp と正規化）を分解して見せる
  *           renderValueMixing       STEP4 : 配分で v を混ぜ、最後に z として足し合わせる
  *           renderVectorComparison  RESULT: x と z を並べる
- *       06  renderAttentionMatrix   05 を4語ぶん繰り返した結果として行列を出す
+ *       07  renderAttentionMatrix   06 を4語ぶん繰り返した結果として行列を出す
  *           renderReadingList       4行それぞれの読み方（数値から生成する）
  *
  *   STEP2 と STEP3 を別の表に分けているのは、「内積を取る」ことと
  *   「それを足して1になる比率に直す」ことが別の操作だからである。
  *   1つの表に詰めると、softmax が単なる列の変換に見えてしまう。
  *
- *   4×4 の行列を 06 に置くのも同じ理由で、行列は 05 の結果であって前提ではない。
+ *   4×4 の行列を 07 に置くのも同じ理由で、行列は 06 の結果であって前提ではない。
  *
  * 【実装している数値モデル】
  *   Vaswani et al. (2017) "Attention Is All You Need" の式(1)、
@@ -36,16 +36,23 @@
  *
  *       Q = X W^Q,   K = X W^K,   V = X W^V
  *
- * 【埋め込みの規約 — このページの中心的な単純化】
- *   埋め込み X を単位行列（one-hot）にしている。すなわち d_model の第 t 軸は
- *   「その語が t 番目の語かどうか」だけを表し、それ以外の意味を持たない。
+ * 【埋め込みの規約 — 軸に意味を与えていること】
+ *   埋め込み X を密なベクトルにし、d_model の4軸に読める意味を与えている。
  *
- *       x_I = [1,0,0,0]  x_like = [0,1,0,0]  x_playing = [0,0,1,0]  x_football = [0,0,0,1]
+ *       軸 = [主体, 動作, もの, スポーツ]
+ *       x_playing = [0.0, 0.6, 0.2, 0.9]   動作でもあり、スポーツでもある動名詞
  *
- *   こうすると x_t W は「W の第 t 行を取り出す」ことと等しくなるので、
- *   W^Q / W^K / W^V の各行が、そのまま語 t の query / key / value になる。
- *   実際のモデルの埋め込み表引きも、内部的にはこれと同じ演算である。
- *   軸に「人」「動作」のような人工的な意味を割り当てないための選択でもある。
+ *   これは W の役割を見せるための選択である。W は「入力のどの特徴を、どれだけ拾って
+ *   別の空間へ写すか」を決める行列であり、その働きを数字で追うには、拾われる側に
+ *   名前が要る。X を one-hot にすると x_t W は「W の第 t 行を引く」表引きに退化し、
+ *   特徴を混ぜる操作そのものが画面から消えてしまう。
+ *
+ *   ただし、本物の埋め込みの軸にこういう意味は無い。意味は特定の軸ではなく多数の軸に
+ *   分散して載っており、1軸を取り出しても人間に読める概念には対応しない。
+ *   この断りは index.html の 03 に明記している。
+ *
+ *   意味を持たせているのは d_model の軸だけである。d_k（query/key の平面）と
+ *   d_v（value 空間）の軸には意味を置かず、「軸1」「軸2」と番号でだけ呼ぶ。
  *
  * 【行列の向きの規約】
  *   すべての行列は「行 = トークン」で持つ。したがって x_t, q_t, k_t, v_t は
@@ -72,7 +79,7 @@
  *   学習で得られる本物の key もそうはならない。将来この値を整えたくなっても、
  *   一般の配置のままにしておくこと。
  *
- * 【q / k / v の軸に名前を付けていない理由】
+ * 【q / k の平面の軸に名前を付けていない理由】
  *   attention がこの空間から取り出す情報は内積 q·k だけである。すべての q と k を
  *   同じ回転で回しても内積は1つも変わらないので、出力 z も変わらない。つまり座標の
  *   取り方は任意で、意味を持つのはベクトルどうしの相対的な向きと長さだけである。
@@ -100,7 +107,7 @@
 
 /** 各表現の次元数。d_model は埋め込み、d_k は query/key、d_v は value の次元。 */
 const MODEL_DIMENSIONS = {
-  embedding: 4, // d_model : 入力埋め込みの次元。X を one-hot にしているのでトークン数と等しい
+  embedding: 4, // d_model : 入力埋め込みの次元。意味の特徴を4つ立てている
   key: 2,       // d_k     : query と key が住む空間の次元（両者は同じでなければ内積が取れない）
   value: 4,     // d_v     : value の次元。ここでは比較しやすいよう d_model と同じにしている
 };
@@ -108,9 +115,15 @@ const MODEL_DIMENSIONS = {
 /** 例文のトークン列。実際のトークナイザは "." も1トークンにするが、ここでは4語に簡略化する。 */
 const SENTENCE_TOKENS = ['I', 'like', 'playing', 'football'];
 
-/** 埋め込み空間 d_model の各軸のラベル。第 t 軸は「その語が t 番目の語かどうか」を表すので、
- *  軸の名前はトークンそのものになる。抽象的な意味づけを一切置かないための設計である。 */
-const EMBEDDING_AXIS_LABELS = SENTENCE_TOKENS;
+/**
+ * 埋め込み空間 d_model の各軸のラベル。
+ *
+ * ここだけは軸に人間が読める意味を与えている。W が「入力のどの特徴を、どれだけ拾うか」を
+ * 決める行列であることを見せるには、拾われる側の特徴に名前が要るためである。
+ * 本物の埋め込みの軸にこういう意味は無い（意味は軸ではなく分散して載っている）。
+ * その断りは index.html の 03 に書いてある。
+ */
+const EMBEDDING_AXIS_LABELS = ['主体', '動作', 'もの', 'スポーツ'];
 
 /** query と key が共有する空間 d_k の各軸。両者は同じ空間に住まないと内積が取れない。
  *  この軸に人間が読める意味はないので、番号でだけ呼ぶ。 */
@@ -120,65 +133,86 @@ const SCORE_SPACE_AXIS_LABELS = ['軸1', '軸2'];
 const VALUE_AXIS_LABELS = ['軸1', '軸2', '軸3', '軸4'];
 
 /**
- * 埋め込み X の各行。単位行列（one-hot）にしている。
- * 語そのもの以外の情報を持たない、最小の埋め込みである。
- * この形にすると x_t W = 「W の第 t 行」となるので、下の3つの重み行列は
- * そのまま「語ごとの query / key / value の一覧表」として読める。
+ * 埋め込み X の各行。軸は EMBEDDING_AXIS_LABELS の [主体, 動作, もの, スポーツ]。
+ *
+ * 密なベクトルにしてあることが重要である。one-hot にすると x_t W が
+ * 「W の第 t 行を引く」表引きに退化してしまい、W が入力の成分を混ぜる様子、
+ * すなわち特徴抽出そのものが画面から消える。
+ *
+ * 値は「その語がその特徴をどれだけ持つか」を手で書いたものである。
+ * playing が動作 0.6 とスポーツ 0.9 を併せ持つ動名詞であること、
+ * football がもの 1.0 でスポーツ 0.3 を帯びること、が下の計算をそのまま動かす。
  */
 const TOKEN_EMBEDDINGS = {
-  I:        [1, 0, 0, 0],
-  like:     [0, 1, 0, 0],
-  playing:  [0, 0, 1, 0],
-  football: [0, 0, 0, 1],
+  //          主体  動作  もの  スポーツ
+  I:        [1.0, 0.0, 0.1, 0.0],
+  like:     [0.3, 1.0, 0.1, 0.0],
+  playing:  [0.0, 0.6, 0.2, 0.9],
+  football: [0.1, 0.1, 1.0, 0.3],
 };
 
 /**
- * W^K : 埋め込み → key。第 t 行がそのまま語 t の key である。
+ * W^K : 埋め込み → key。行が「埋め込みの軸」、列が「key の平面の軸」である。
  *
- * 4語を d_k = 2 の平面上の互いに違う向きに置いてあるだけである。
- * key に必要な条件は「4語が互いに見分けられる向きを向いていること」だけで、
- * 2本をほとんど同じ向きにすると、その2語はどの query から見てもほぼ同じ内積を返し、
- * 区別できなくなる。効いてくる制約はこれだけである。
+ * 各行は「その意味特徴を持つ語を、平面のどちらへどれだけ押すか」を表す。
+ * 4つの特徴を平面の4つの違う向きへ割り当ててあるので、特徴の配合が違う語は
+ * 平面の違う場所に置かれ、互いに見分けられるようになる。
  *
- * 直交も等間隔も課していない（k_I·k_like = 0.58, k_like·k_playing = -0.47）。
- * 長さも 1 に揃えていない。内積は向きの近さと長さの積なので、長い key は
- * どの query からも少し強めに見られる、という効果を持つだけで、仕組みは変わらない。
+ *     主体   → 約  27°     もの     → 約 295°
+ *     動作   → 約  90°     スポーツ → 約 196°
+ *
+ * 結果として k_I 20°, k_like 75°, k_playing 170°, k_football 285° に落ちる。
+ * 間隔は 55° / 95° / 115° / 95° で等間隔ではなく、どの2本も直交していない
+ * （k_I·k_like = 0.76, k_like·k_playing = -0.10, k_playing·k_football = -0.46）。
+ * 長さも 1 に揃えていない（0.95〜1.25）。
+ * key に効いてくる制約は「2語がほとんど同じ向きにならないこと」だけである。
  */
 const KEY_WEIGHTS = [
-  [ 1.0,  0.4], // I        : 約  22°, 長さ 1.08
-  [ 0.1,  1.2], // like     : 約  85°, 長さ 1.20
-  [-1.1, -0.3], // playing  : 約 195°, 長さ 1.14
-  [ 0.3, -1.0], // football : 約 287°, 長さ 1.04
+  [ 0.93,  0.48], // 主体     : 平面の右上へ押す（約  27°）
+  [-0.01,  1.18], // 動作     : 平面の真上へ押す（約  90°）
+  [ 0.55, -1.17], // もの     : 平面の右下へ押す（約 295°）
+  [-1.15, -0.34], // スポーツ : 平面の左へ押す  （約 196°）
 ];
-
 /**
- * W^Q : 埋め込み → query。X が one-hot なので、第 t 行がそのまま語 t の query である。
+ * W^Q : 埋め込み → query。行が「埋め込みの軸」、列が「query の平面の軸」である。
  *
- * 各行を「その語が見つけたい相手の key の向き」へ向けてある。数度ずらしてあるのは、
- * 向きが完全に一致していなくても、他の3つより内積が大きければ
- * softmax 後の配分もその語が最大になるためである。
+ * 各行は「その意味特徴を持つ語は、平面のどの向きの key を探しに行くか」を表す。
+ * 語の query は、その語が持つ特徴ぶんだけ各行を足し合わせたものになる。
+ *
+ *     主体   → 約  62°  ≈ k_like の向き(75°)      （主体らしい語は動作を探す）
+ *     動作   → 約 195°  ≈ k_playing の向き(170°)  （動作らしい語は目的語を探す）
+ *     もの   → 約 174°  ≈ k_playing の向き(170°)  （もの らしい語は動作を探す）
+ *     スポーツ → 約 318°  ≈ k_football の向き(285°) （スポーツらしい語は競技名を探す）
+ *
+ * 各行は狙う key の向きと完全には一致していない。一致していなくても、
+ * 足し合わせた q が他の3つより大きい内積を返せば配分は最大になる。
+ *
+ * playing の query が k_football を向くのは、この足し合わせの結果である。
+ * 動作 0.6 ぶんの左向きと、スポーツ 0.9 ぶんの右下向きが合成されて下を向く。
+ * 特徴の配合が向きを決める、という様子がいちばん見えるのがこの語である。
  *
  * 向きが「どの語の内積が最も大きくなるか」を、長さが「その差をどれだけ広げるか」を決める。
- * q を長くすると4つの内積がまとめて比例して大きくなり、softmax に入る値の差も広がるので
- * 配分が1語に集中する。ここでは長さを 2.4 前後にしている。
+ * 各行の長さは、出来上がる q の長さが 2.4〜2.7 に収まるように取ってある。
  */
 const QUERY_WEIGHTS = [
-  [ 0.3,  2.4], // I        : 約  83° → k_like   の向き（主語 → 述語）
-  [-2.4, -0.6], // like     : 約 194° → k_playing の向き（動詞 → 目的語）
-  [ 0.8, -2.5], // playing  : 約 288° → k_football の向き（動詞 → 目的語）
-  [-2.2, -0.9], // football : 約 202° → k_playing の向き。like からは離してある（目的語 → 述語）
+  [ 1.29,  2.38], // 主体     : k_like    の向きを指す
+  [-2.57, -0.70], // 動作     : k_playing の向きを指す
+  [-3.12,  0.35], // もの     : k_playing の向きを指す
+  [ 2.88, -2.57], // スポーツ : k_football の向きを指す
 ];
-
 /**
- * W^V : 埋め込み → value。第 t 行がそのまま語 t の value である。
- * 単位行列にしていないことが重要で、v_t は one-hot の x_t とは別のベクトルになる。
+ * W^V : 埋め込み → value。行が「埋め込みの軸」、列が「value 空間の軸」である。
+ *
+ * value に課される幾何的な制約は無い。key と揃える必要も、query と内積が取れる必要もない。
+ * ここでは意味特徴を軽く混ぜて別の4次元へ写しているだけである。
+ * 重要なのは、出来上がる v_t が x_t とは別のベクトルになること。
  * これが「重みが掛かる先は V であって埋め込み X ではない」ということの中身である。
  */
 const VALUE_WEIGHTS = [
-  [1.0, 0.2, 0.0, 0.0], // I
-  [0.0, 1.0, 0.4, 0.0], // like
-  [0.0, 0.3, 1.0, 0.5], // playing
-  [0.6, 0.0, 0.2, 1.0], // football
+  [1.0, 0.2, 0.0, 0.1], // 主体
+  [0.1, 1.0, 0.3, 0.0], // 動作
+  [0.0, 0.2, 1.0, 0.4], // もの
+  [0.2, 0.0, 0.3, 1.0], // スポーツ
 ];
 
 /**
@@ -196,6 +230,9 @@ const QUERY_INTENTS = {
 
 /** 各トークンに割り当てる表示色。CSS の :root と手動で同期させている。 */
 const TOKEN_COLORS = ['#2563eb', '#0891b2', '#7c3aed', '#ea580c'];
+
+/** 重み行列の行（意味の特徴）を平面に描くときの色。語ではないので彩色しない。 */
+const AXIS_ARROW_COLOR = '#94a3b8';
 
 /** マスクされたスコアに入れる値。softmax の指数が 0 になり、その語は完全に無視される。 */
 const MASKED_SCORE = Number.NEGATIVE_INFINITY;
@@ -292,9 +329,9 @@ function softmaxWithDetail(scores) {
  * ========================================================================= */
 
 /**
- * 入力行列 X を作る。各行は語そのものを表す one-hot ベクトルである。
+ * 入力行列 X を作る。各行は語の意味特徴を並べた密なベクトルである。
  * 本物のモデルはここへさらに positional encoding を足すが、このページでは足していない。
- * 足さない影響は「語順の情報が入らない」ことで、その意味は解説側（08）で述べている。
+ * 足さない影響は「語順の情報が入らない」ことで、その意味は解説側（09）で述べている。
  */
 function buildInputVectors() {
   return SENTENCE_TOKENS.map((token) => TOKEN_EMBEDDINGS[token].slice());
@@ -559,28 +596,42 @@ function buildTokenArrows(vectors, prefix, className) {
   }));
 }
 
+/** 重み行列の各行を矢印にする。行は語ではなく意味の特徴なので、色は付けず灰色でまとめる。 */
+function buildAxisArrows(weightMatrix) {
+  return EMBEDDING_AXIS_LABELS.map((label, index) => ({
+    vector: weightMatrix[index],
+    color: AXIS_ARROW_COLOR,
+    label,
+    className: 'plane-vector is-faint',
+  }));
+}
+
 /* ===========================================================================
- * 7. 描画 — 04: 使用する行列と、その平面での姿
+ * 7. 描画 — 05: 使用する行列と、その平面での姿
  *
  *   key を先に出し、query を後に出す。query は「どの key を探すか」で向きが
  *   決まるので、key を知らないと query の数値を読む足場が無いためである。
- *   X が one-hot なので Q, K, V は W^Q, W^K, W^V と数値が一致する。
- *   同じ数字の表を重ねて出さず、一致することは本文の1文で述べている。
+ *   重み行列（行 = 意味の特徴）と、その結果の Q/K/V（行 = 語）を対にして出す。
+ *   両方を並べないと、W の行と語の行が同じものに見えてしまう。
  * ========================================================================= */
 
 function renderProjectionSection(pass) {
   ui.inputTable.innerHTML = '';
   ui.inputTable.appendChild(createMatrixTable(
-    'X : 入力（one-hot 埋め込み）— 行が語、列が埋め込みの軸',
+    'X : 入力の埋め込み — 行が語、列が意味の特徴',
     SENTENCE_TOKENS, EMBEDDING_AXIS_LABELS, pass.inputVectors));
 
+  // 図には W^K の4行（特徴が平面のどちらへ押すか）と、その合成である4つの key を重ねる。
   renderVectorPlane(ui.keyPlane,
-    buildTokenArrows(pass.keyVectors, 'k', 'plane-vector'),
-    '4語の key を d_k = 2 の平面に置いたもの。向きが互いに違うことが、4語を見分けられるということ。');
+    buildAxisArrows(KEY_WEIGHTS).concat(buildTokenArrows(pass.keyVectors, 'k', 'plane-vector')),
+    '灰色の細い矢印が W^K の4行（各特徴が平面のどちらへ押すか）。色の矢印は、語の特徴ぶんだけそれらを足した key。');
   ui.keyTable.innerHTML = '';
   ui.keyTable.appendChild(createMatrixTable(
-    'W^K : 語ごとの key 一覧（上の図の矢印の座標そのもの）',
+    'W^K : 行が意味の特徴、列が平面の軸（灰色の矢印の座標）',
     EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, KEY_WEIGHTS));
+  ui.keyTable.appendChild(createMatrixTable(
+    'K = X W^K : 行が語（色の矢印の座標）',
+    SENTENCE_TOKENS, SCORE_SPACE_AXIS_LABELS, pass.keyVectors));
 
   renderVectorPlane(ui.queryPlane,
     buildTokenArrows(pass.keyVectors, 'k', 'plane-vector is-faint')
@@ -588,13 +639,19 @@ function renderProjectionSection(pass) {
     '同じ平面に query（破線）を重ねたもの。各 query は、その語が見つけたい相手の key の方を向いている。');
   ui.queryTable.innerHTML = '';
   ui.queryTable.appendChild(createMatrixTable(
-    'W^Q : 語ごとの query 一覧（k と内積を取るので同じ d_k = 2）',
+    'W^Q : 行が意味の特徴、列が平面の軸',
     EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, QUERY_WEIGHTS));
+  ui.queryTable.appendChild(createMatrixTable(
+    'Q = X W^Q : 行が語（破線の矢印の座標）',
+    SENTENCE_TOKENS, SCORE_SPACE_AXIS_LABELS, pass.queryVectors));
 
   ui.valueTable.innerHTML = '';
   ui.valueTable.appendChild(createMatrixTable(
-    'W^V : 語ごとの value 一覧（d_v = 4。各行が one-hot でないことに注目）',
+    'W^V : 行が意味の特徴、列が value 空間の軸',
     EMBEDDING_AXIS_LABELS, VALUE_AXIS_LABELS, VALUE_WEIGHTS));
+  ui.valueTable.appendChild(createMatrixTable(
+    'V = X W^V : 行が語。X の行とは別のベクトルになっていることに注目',
+    SENTENCE_TOKENS, VALUE_AXIS_LABELS, pass.valueVectors));
 }
 
 /** 行ラベル・列ラベル付きの行列表を1つ作る。 */
@@ -628,7 +685,7 @@ function createTableHeadRow(columnLabels) {
 }
 
 /* ===========================================================================
- * 8. 描画 — 05: 1語を最後まで追う
+ * 8. 描画 — 06: 1語を最後まで追う
  * ========================================================================= */
 
 /** 注目する語を選ぶボタン列。sticky バーの中にあり、STEP を読みながら切り替えられる。 */
@@ -648,17 +705,47 @@ function renderTokenButtons() {
   });
 }
 
-/** STEP1: 注目している語の query を1本作る。 */
+/**
+ * STEP1: 注目している語の query を1本作る。
+ *
+ * STEP4 と同じ4段の階段で見せる。ここは「W が入力のどの特徴をどれだけ拾うか」が
+ * 数字として現れる唯一の場所なので、掛け算を畳まずに開く。
+ *
+ *     q_i = x_i W^Q
+ *         = 0.00·(主体の行) + 0.60·(動作の行) + 0.20·(もの の行) + 0.90·(スポーツの行)
+ *         = 0.00·[-0.22, 2.58] + 0.60·[-2.15, -0.62] + …
+ *         = [0.47, -2.66]
+ *
+ * 成分が 0 の項も落とさない。「この語はその特徴を持たないので、その行を1ミリも使わない」
+ * ということ自体が読ませたい情報だからである。
+ */
 function renderQueryStep(pass) {
-  const token = SENTENCE_TOKENS[state.focusTokenIndex];
   const index = state.focusTokenIndex;
+  const token = SENTENCE_TOKENS[index];
+  const features = pass.inputVectors[index];
+  const terms = { digits: DISPLAY_DIGITS.vector, keepAll: true };
+
   ui.queryStep.innerHTML = '';
   ui.queryStep.appendChild(createElement('p', 'step-formula',
-    `x_${token} = ${formatVector(pass.inputVectors[index], DISPLAY_DIGITS.vector)}` +
-    `   （軸: ${EMBEDDING_AXIS_LABELS.join(' / ')}） ← ${index + 1}番目の軸だけが 1`));
-  ui.queryStep.appendChild(createElement('p', 'step-formula',
-    `q_${token} = x_${token} W^Q = ${formatVector(pass.queryVectors[index], DISPLAY_DIGITS.vector)}` +
-    `   ← W^Q の ${token} 行そのもの`));
+    `x_${token} = ${formatVector(features, DISPLAY_DIGITS.vector)}` +
+    `   （軸: ${EMBEDDING_AXIS_LABELS.join(' / ')}）`));
+
+  const ladder = createElement('div', 'mix-ladder');
+  appendLadderRow(ladder,
+    `q_${token} = x_${token} W^Q`,
+    '定義。x の各成分で W^Q の行を混ぜる');
+  appendLadderRow(ladder,
+    `= ${formatWeightedTerms(features, (axis) => `(${EMBEDDING_AXIS_LABELS[axis]} の行)`, terms)}`,
+    'どの特徴をどれだけ使うかは x が決める');
+  appendLadderRow(ladder,
+    `= ${formatWeightedTerms(features,
+      (axis) => formatVector(QUERY_WEIGHTS[axis], DISPLAY_DIGITS.vector), terms)}`,
+    'W^Q の行を開く');
+  appendLadderRow(ladder,
+    `= ${formatVector(pass.queryVectors[index], DISPLAY_DIGITS.vector)}`,
+    `これが ${token} の query`);
+  ui.queryStep.appendChild(ladder);
+
   ui.queryStep.appendChild(createVectorChips(pass.queryVectors[index], SCORE_SPACE_AXIS_LABELS, false));
 }
 
@@ -768,7 +855,7 @@ function renderValueMixing(pass) {
     'STEP3 の配分を入れる。係数が混合比そのもの');
   appendLadderRow(ladder,
     `= ${formatWeightedTerms(weights, (keyIndex) => formatVector(pass.valueVectors[keyIndex], DISPLAY_DIGITS.vector))}`,
-    'v の中身を開く。one-hot な x とは別のベクトル');
+    'v の中身を開く。入力の x とは別のベクトル');
   appendLadderRow(ladder,
     `= ${formatVector(pass.contextVectors[index], DISPLAY_DIGITS.vector)}`,
     `足し合わせた結果が文脈ベクトル z_${token}`);
@@ -801,11 +888,13 @@ function appendLadderRow(container, expressionText, noteText) {
  * describeTerm に何を返させるかで、記号のままの形にも、v の中身を開いた形にもなる。
  * 因果マスクで 0 になった項は落とす。落とすこと自体が「その語は見ていない」の表示である。
  */
-function formatWeightedTerms(weights, describeTerm) {
+function formatWeightedTerms(weights, describeTerm, options) {
+  const settings = options || {};
+  const digits = settings.digits === undefined ? DISPLAY_DIGITS.weight : settings.digits;
   return weights
     .map((weight, keyIndex) => ({ weight, keyIndex }))
-    .filter((term) => term.weight >= NEGLIGIBLE_WEIGHT)
-    .map((term) => `${formatNumber(term.weight, DISPLAY_DIGITS.weight)}·${describeTerm(term.keyIndex)}`)
+    .filter((term) => settings.keepAll || term.weight >= NEGLIGIBLE_WEIGHT)
+    .map((term) => `${formatNumber(term.weight, digits)}·${describeTerm(term.keyIndex)}`)
     .join(' + ');
 }
 
@@ -844,14 +933,14 @@ function renderResultReading(pass) {
   const index = state.focusTokenIndex;
   const focusToken = SENTENCE_TOKENS[index];
   ui.resultReading.textContent =
-    `x_${focusToken} は "${focusToken}" の軸だけが 1 の、周りを何も知らないベクトルでした。` +
+    `x_${focusToken} は "${focusToken}" という語そのものの特徴だけを並べた、周りを何も知らないベクトルでした。` +
     `attention を通すと ${describeTopReferences(pass.attentionWeights[index])}を最も強く参照し、` +
     `z_${focusToken} は value をその配分で混ぜたベクトルになります。` +
     `他の3語も選んでみてください。同じ計算が、違う配分で走ります。`;
 }
 
 /* ===========================================================================
- * 9. 描画 — 06: 4語ぶんまとめた行列
+ * 9. 描画 — 07: 4語ぶんまとめた行列
  * ========================================================================= */
 
 /** 4×4 の attention 行列。行が query 側の語、列が key 側の語。 */
@@ -875,8 +964,8 @@ function renderAttentionMatrix(pass) {
 }
 
 /**
- * 行見出し。クリックするとその語で 05 を計算し直し、05 の先頭までスクロールして戻す。
- * 行列は 05 の下にあるので、戻さないと「押したのに何も起きない」ように見えるためである。
+ * 行見出し。クリックするとその語で 06 を計算し直し、06 の先頭までスクロールして戻す。
+ * 行列は 06 の下にあるので、戻さないと「押したのに何も起きない」ように見えるためである。
  */
 function createMatrixRowHeader(queryIndex) {
   const header = createElement('button', 'matrix-row-head', SENTENCE_TOKENS[queryIndex]);
@@ -914,7 +1003,7 @@ function renderMatrixCaption(pass) {
     ? '因果マスクが有効なので、各語は自分より後ろを見られません（decoder / GPT 型）。'
     : 'マスクなしなので、各語は文全体を双方向に見ています（encoder / BERT 型）。';
   ui.matrixCaption.textContent =
-    `各行の和は 1 です。第 i 行が、05 で1語ぶん計算した配分そのものです。${divisorText}。${maskText}`;
+    `各行の和は 1 です。第 i 行が、06 で1語ぶん計算した配分そのものです。${divisorText}。${maskText}`;
 }
 
 /**

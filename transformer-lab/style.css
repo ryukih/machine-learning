@@ -160,6 +160,8 @@ p:last-child { margin-bottom: 0; }
 }
 .caveat p { margin: 0; font-size: .89rem; }
 .caveat b { color: var(--orange); }
+/* 本文の途中に置く場合は前後に余白を取る（ヒーローでは直前の要素が余白を持っている） */
+.card .caveat { margin: 16px 0; }
 
 /* ---- 本体レイアウト（1カラム縦積み） ----------------------------------- */
 .layout {
@@ -341,7 +343,24 @@ p:last-child { margin-bottom: 0; }
 .param-table tbody th { text-align: left; font-weight: 700; background: #f8fafd; }
 .param-table td { font-family: "SFMono-Regular", Consolas, monospace; }
 
-/* ---- 05: 1語を追う ----------------------------------------------------- */
+/* ---- 04: CNN との対応表（文章では対比が読み取りにくいので表にする） ----- */
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 28rem;
+  margin: 4px 0 16px;
+}
+.compare-table th, .compare-table td {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  font-size: .87rem;
+  text-align: left;
+  vertical-align: top;
+}
+.compare-table thead th { background: #f2f6fb; color: var(--muted); font-size: .78rem; font-weight: 800; }
+.compare-table tbody th { background: #f8fafd; white-space: nowrap; font-weight: 800; }
+
+/* ---- 06: 1語を追う ----------------------------------------------------- */
 .walkthrough { display: flex; flex-direction: column; gap: 18px; }
 .walkthrough-intro { padding-bottom: clamp(14px, 2vw, 22px); }
 
