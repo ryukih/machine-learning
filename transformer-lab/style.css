@@ -4,8 +4,20 @@
  * =============================================================================
  *
  * 【このファイルの目的】
- *   解説カード、attention 行列、計算ステップ、パラメータ表のレイアウトと配色を
+ *   解説カード、計算ステップ、attention 行列、パラメータ表のレイアウトと配色を
  *   定義する。数値そのものには関与しない（数値は app.js が入れる）。
+ *
+ * 【レイアウトの原則 — 一本道であること】
+ *   このページには「横に2つ以上のカードを並べるグリッド」を置かない。
+ *   本文・図・表・デモをすべて1カラムに縦一列で積み、読者が読む順番を
+ *   選ばされないようにする。並列に見える概念（Q/K/V の3役、Transformer の
+ *   前後にある処理）も、縦に積んだうえで左の色レールと通し番号で
+ *   「上から順に読む」ことを示す。
+ *
+ *   したがって本文カラムは狭めの max-width（--column）に固定する。広くすると
+ *   1行が長くなって読みにくいうえ、横に何かを置きたくなるためである。
+ *   横に伸びうるもの（行列・表・数式）だけを .matrix-scroll / .table-scroll /
+ *   .formula-block で包み、その内側だけを横スクロールさせる。
  *
  * 【配色の規約】
  *   :root のカスタムプロパティは他のページと同じ値を定義している。共通ファイルへ
@@ -19,20 +31,20 @@
  *   --token-color としてインラインで注入される。Q/K/V の3役はそれぞれ
  *   --blue / --cyan / --violet に対応させ、本文中でも同じ色で参照する。
  *
+ * 【sticky な語の切り替えバー】
+ *   .walk-bar は 05 の STEP 群を読んでいる間ずっと画面上端に貼り付く。
+ *   STEP 1〜4 は縦に長く、語を切り替えるたびに上へ戻るのを避けるためである。
+ *   バーの高さぶんだけ、アンカー移動先が隠れないよう各節に scroll-margin-top を
+ *   与えている（--bar-height と揃えること）。
+ *
  * 【attention 行列の作り】
  *   .matrix は (1 + トークン数) 列の CSS Grid。列数は app.js が --token-count を
  *   立てて決める。各セルの濃さは --fill（0〜1 の attention 重み）で、
  *   rgba() のアルファに直接差し込んでいる。alpha に係数 .85 を掛けているのは、
  *   最大値のセルでも文字が黒のまま読めるようにするため。
  *
- * 【レイアウトの構造】
- *   .layout は1カラムの縦積み。行列と表は横スクロール可能なラッパ
- *   （.matrix-scroll / .table-scroll）で包み、狭い画面でページ全体が
- *   横スクロールするのを防いでいる。
- *
  * 【ブレークポイント】
- *   980px : 解説の3カラムグリッドを2カラムへ。
- *   720px : すべて1カラム。ツールバーを縦積みにする。
+ *   720px : 余白を詰め、sticky バーを縦積みにする。
  *   520px : 数式と行列の文字を一段小さくする。
  * =============================================================================
  */
@@ -50,6 +62,12 @@
   --orange: #ea580c;
   --shadow: 0 16px 45px rgba(31, 41, 55, .08);
 
+  /* 本文1カラムの幅。ここを広げると横並びを置きたくなるので、意図的に狭く保つ。 */
+  --column: 860px;
+
+  /* sticky な語の切り替えバーの高さ。scroll-margin-top と揃える。 */
+  --bar-height: 4.6rem;
+
   /* 行列セルの塗りに使う主色を RGB 成分で持つ。rgba() のアルファへ --fill を差し込むため。 */
   --green-rgb: 5, 150, 105;
 }
@@ -64,7 +82,7 @@ body {
     radial-gradient(circle at 100% 16%, rgba(37,99,235,.08), transparent 26rem),
     var(--bg);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", sans-serif;
-  line-height: 1.65;
+  line-height: 1.75;
 }
 
 button, input { font: inherit; }
@@ -75,12 +93,14 @@ code {
   padding: .12rem .36rem;
   font-size: .92em;
 }
-h2 { font-size: clamp(1.2rem, 2.5vw, 1.5rem); letter-spacing: -.02em; }
+h2 { font-size: clamp(1.15rem, 2.4vw, 1.42rem); letter-spacing: -.02em; }
 h3 { font-size: 1rem; letter-spacing: -.01em; }
+p { margin: 0 0 14px; }
+p:last-child { margin-bottom: 0; }
 
 /* ---- ヒーロー ---------------------------------------------------------- */
-.hero { padding: 62px 24px 28px; }
-.hero-inner { max-width: 1180px; margin: 0 auto; }
+.hero { padding: 62px 24px 26px; }
+.hero-inner { max-width: var(--column); margin: 0 auto; }
 .eyebrow {
   margin: 0 0 8px;
   color: var(--green);
@@ -95,25 +115,61 @@ h3 { font-size: 1rem; letter-spacing: -.01em; }
   letter-spacing: -.04em;
   line-height: 1.05;
 }
-.lead { margin: 0 0 18px; max-width: 62ch; color: #33415c; font-size: 1.03rem; }
+.lead { margin: 0 0 24px; color: #33415c; font-size: 1.03rem; }
 .lead strong { color: var(--green); }
 
-.concept-chain {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 26px;
-  font-size: .82rem;
-  font-weight: 700;
-}
-.concept-chain span {
-  padding: 4px 12px;
+/* ---- 道すじ（目次ではなく、順番そのものを見せる） ---------------------- */
+.roadmap {
+  margin: 0 0 18px;
+  padding: 16px 20px;
   border: 1px solid var(--line);
-  border-radius: 999px;
-  background: rgba(255,255,255,.75);
+  border-radius: 16px;
+  background: rgba(255,255,255,.72);
 }
-.concept-chain b { color: var(--muted); }
+.roadmap-title {
+  margin: 0 0 10px;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.roadmap ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+.roadmap a {
+  display: block;
+  padding: 3px 0;
+  color: var(--ink);
+  font-size: .9rem;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+}
+.roadmap a:hover { border-bottom-color: var(--green); }
+.roadmap b {
+  display: inline-block;
+  min-width: 2.2rem;
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 冒頭の断り書き ---------------------------------------------------- */
+.caveat {
+  padding: 14px 18px;
+  border-radius: 14px;
+  border-left: 4px solid var(--orange);
+  background: rgba(234,88,12,.08);
+}
+.caveat p { margin: 0; font-size: .89rem; }
+.caveat b { color: var(--orange); }
+
+/* ---- 本体レイアウト（1カラム縦積み） ----------------------------------- */
+.layout {
+  max-width: var(--column);
+  margin: 0 auto;
+  padding: 10px 24px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
 
 /* ---- カード共通 -------------------------------------------------------- */
 .card {
@@ -121,134 +177,171 @@ h3 { font-size: 1rem; letter-spacing: -.01em; }
   border: 1px solid var(--line);
   border-radius: 18px;
   box-shadow: var(--shadow);
-  padding: clamp(18px, 2.6vw, 28px);
+  padding: clamp(18px, 2.6vw, 30px);
 }
 .card > h2:first-child { margin-top: 0; }
-.card-header { margin-bottom: 14px; }
-.card-header h2 { margin: 0 0 4px; }
-.card-header p { margin: 0; color: var(--muted); font-size: .88rem; }
+.card h2 { margin: 0 0 14px; }
 
-/* ---- 冒頭の紹介枠 ------------------------------------------------------ */
-.intro { margin-bottom: 6px; }
-.intro h2 { margin: 0 0 4px; }
-.intro-sub { margin: 0 0 18px; color: var(--muted); font-size: .92rem; }
-.intro-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
+/* 節番号。h2 の先頭に置いて、上から順に増える一本道であることを示す。 */
+.section-badge {
+  display: inline-block;
+  margin-right: 10px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+  vertical-align: 2px;
 }
-.intro-item { border-top: 3px solid var(--line); padding-top: 12px; }
-.intro-what { border-top-color: var(--green); }
-.intro-role { border-top-color: var(--blue); }
-.intro-caveat { border-top-color: var(--orange); }
-.intro-item h3 { margin: 0 0 6px; }
-.intro-item p { margin: 0 0 10px; font-size: .9rem; }
-.intro-note { color: var(--muted); font-size: .84rem !important; }
 
-.intro-formula, .formula-block {
+/* アンカー移動と、sticky バーに隠されないための余白 */
+[id] { scroll-margin-top: calc(var(--bar-height) + 12px); }
+
+.note { color: var(--muted); font-size: .86rem; }
+
+/* ---- 数式ブロック ------------------------------------------------------ */
+.formula-block {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 12px 14px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
   border-radius: 12px;
   background: #f2f6fb;
   border: 1px solid var(--line);
   overflow-x: auto;
 }
-.intro-formula code, .formula-block code {
+.formula-block code {
   background: none;
   padding: 0;
   white-space: pre;
   font-size: .86rem;
   color: #1f2c44;
 }
-.formula-block { margin: 12px 0 16px; }
 .formula-block.small { margin: 10px 0 0; padding: 10px 12px; }
 .formula-block.small code { font-size: .8rem; }
 
-/* ---- 本体レイアウト ---------------------------------------------------- */
-.layout {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 8px 24px 40px;
+/* ---- 02: Q / K / V の3役（横並びにせず縦に積む） ----------------------- */
+.role-stack {
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 22px;
-}
-
-/* ---- Q / K / V の3役 --------------------------------------------------- */
-.role-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin: 16px 0;
+  gap: 12px;
 }
 .role {
-  padding: 16px;
-  border-radius: 14px;
+  position: relative;
+  padding: 14px 18px 14px 20px;
   border: 1px solid var(--line);
+  border-left: 5px solid var(--role-color, var(--muted));
+  border-radius: 0 14px 14px 0;
   background: #fbfdff;
-}
-.role-symbol {
-  margin: 0;
-  font-size: 1.6rem;
-  font-weight: 800;
-  line-height: 1;
-  color: var(--role-color, var(--muted));
 }
 .role-q { --role-color: var(--blue); }
 .role-k { --role-color: var(--cyan); }
 .role-v { --role-color: var(--violet); }
-.role h3 { margin: 6px 0 6px; color: var(--role-color); }
-.role p { margin: 0; font-size: .88rem; }
+.role-symbol {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 2px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  line-height: 1.2;
+  color: var(--role-color);
+}
+.role-symbol span {
+  font-size: .74rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.role h3 { margin: 0 0 6px; color: var(--role-color); }
+.role p { margin: 0; font-size: .9rem; }
 
 .callout {
-  padding: 14px 16px;
+  margin: 0 0 16px;
+  padding: 14px 18px;
   border-radius: 12px;
   border-left: 4px solid var(--green);
   background: rgba(5,150,105,.07);
 }
 .callout p { margin: 0; font-size: .92rem; }
+.callout b { color: var(--green); }
+.callout em { font-style: normal; text-decoration: underline; text-underline-offset: 3px; }
 
-.orientation-note {
-  display: grid;
-  gap: 4px;
-  padding: 12px 16px;
-  margin: 4px 0 14px;
-  border-radius: 12px;
-  background: #f2f6fb;
-  border: 1px solid var(--line);
+/* ---- 04: パラメータ表（縦積み・表そのものは中身の幅） ------------------ */
+.param-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin: 0 0 16px;
 }
-.orientation-note p { margin: 0; font-size: .88rem; }
-.orientation-note b { color: var(--green); }
+.param-table { margin: 0; overflow-x: auto; }
+.param-table figcaption {
+  margin-bottom: 6px;
+  font-size: .78rem;
+  font-weight: 800;
+  color: var(--green);
+}
+.param-table table { border-collapse: collapse; }
+.param-table th, .param-table td {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  font-size: .78rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.param-table thead th { background: #f2f6fb; font-weight: 700; color: var(--muted); }
+.param-table tbody th { text-align: left; font-weight: 700; background: #f8fafd; }
+.param-table td { font-family: "SFMono-Regular", Consolas, monospace; }
 
-/* ---- 数値デモのツールバー ---------------------------------------------- */
-.lab-section { display: flex; flex-direction: column; gap: 22px; }
-.lab-toolbar {
+/* ---- 05: 1語を追う ----------------------------------------------------- */
+.walkthrough { display: flex; flex-direction: column; gap: 18px; }
+.walkthrough-intro { padding-bottom: clamp(14px, 2vw, 22px); }
+
+/* 語の切り替えバー。STEP を読みながらでも切り替えられるよう上端に貼り付く。 */
+.walk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 -4px;
+  padding: 8px 4px;
+  background: linear-gradient(var(--bg) 72%, rgba(244,247,251,0));
+}
+.walk-bar-inner {
   display: flex;
   flex-wrap: wrap;
-  gap: 22px 46px;
-  align-items: flex-start;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 6px 20px rgba(31,41,55,.08);
 }
-/* 2つのブロック（語の選択・計算の設定）を、狭幅では折り返して縦に積ませる */
-.toolbar-block { flex: 1 1 auto; min-width: min(100%, 15rem); }
-.toolbar-label {
-  margin: 0 0 8px;
-  font-size: .72rem;
+.walk-bar-label {
+  margin: 0;
+  font-size: .7rem;
   font-weight: 800;
   letter-spacing: .1em;
   color: var(--muted);
   text-transform: uppercase;
 }
-.token-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+.token-picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .token-button {
-  padding: 7px 16px;
+  padding: 5px 14px;
   border-radius: 999px;
   border: 1.5px solid var(--line);
   background: #fff;
   color: var(--ink);
   font-weight: 700;
-  font-size: .92rem;
+  font-size: .88rem;
   cursor: pointer;
   transition: border-color .2s ease, background .2s ease, color .2s ease;
 }
@@ -259,19 +352,161 @@ h3 { font-size: 1rem; letter-spacing: -.01em; }
   color: #fff;
 }
 .token-button:focus-visible { outline: 2px solid var(--token-color); outline-offset: 3px; }
+.focus-headline {
+  margin: 0 0 0 auto;
+  font-size: .82rem;
+  font-weight: 700;
+  color: var(--muted);
+}
 
-.switches { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+/* ---- STEP カード ------------------------------------------------------- */
+.step-number {
+  margin: 0 0 2px;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  color: var(--green);
+}
+.step h3 { margin: 0 0 10px; }
+.step-lead { margin: 0 0 16px; font-size: .92rem; color: #33415c; }
+.step-note { margin: 14px 0 0; font-size: .85rem; color: var(--muted); }
+.step-result { border-color: rgba(5,150,105,.35); }
+
+.step-formula {
+  margin: 0 0 8px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: .84rem;
+  color: #1f2c44;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* ---- トグル ------------------------------------------------------------ */
 .switch { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; cursor: pointer; }
 .switch input { accent-color: var(--green); width: 1.05rem; height: 1.05rem; }
+/* 本文の流れの中に置くトグル。効果を説明している場所の直後に置く。 */
+.inline-switch {
+  margin-top: 14px;
+  padding: 8px 14px;
+  border: 1px dashed var(--green);
+  border-radius: 999px;
+  background: rgba(5,150,105,.06);
+  font-weight: 700;
+}
 
-/* ---- attention 行列 ---------------------------------------------------- */
-.matrix-scroll { overflow-x: auto; padding-bottom: 4px; }
+/* ---- 軸ラベル付きベクトル表示 ------------------------------------------ */
+.vector-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.chip-label { font-size: .74rem; font-weight: 700; color: var(--muted); }
+.chip-value { font-family: "SFMono-Regular", Consolas, monospace; font-size: .86rem; font-variant-numeric: tabular-nums; }
+.chip.is-peak { border-color: var(--green); background: rgba(5,150,105,.1); }
+.chip.is-peak .chip-label { color: var(--green); }
+
+/* ---- スコアの表（STEP2 / STEP3） --------------------------------------- */
+.table-scroll { overflow-x: auto; }
+.score-table { width: 100%; border-collapse: collapse; min-width: 30rem; }
+.score-table th, .score-table td {
+  padding: 9px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  font-size: .87rem;
+}
+.score-table thead th {
+  text-align: right;
+  font-size: .74rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.score-table td { font-family: "SFMono-Regular", Consolas, monospace; }
+.score-token {
+  text-align: left !important;
+  font-weight: 800;
+  color: var(--token-color);
+}
+.score-weight { font-weight: 800; }
+.score-table tr.is-top { background: rgba(5,150,105,.08); }
+.score-table tr.is-top .score-weight { color: var(--green); }
+.score-table tfoot th, .score-table tfoot td {
+  border-bottom: none;
+  border-top: 2px solid var(--line);
+  font-weight: 800;
+  color: var(--green);
+}
+.score-table tfoot th { text-align: left; color: var(--muted); }
+
+/* ---- STEP4: value の合成 ----------------------------------------------- */
+.mix-row {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(4rem, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.mix-token { font-weight: 800; font-size: .88rem; color: var(--token-color); }
+.mix-bar { display: block; height: 10px; border-radius: 999px; background: #eef2f8; overflow: hidden; }
+.mix-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--token-color); }
+.mix-vector {
+  background: none;
+  padding: 0;
+  font-size: .78rem;
+  color: #33415c;
+  white-space: nowrap;
+}
+/* 4本を足し合わせた行。ここが z の定義そのものなので、他の行と区別する。 */
+.mix-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 12px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(5,150,105,.08);
+  border-left: 4px solid var(--green);
+}
+.mix-total-label { font-size: .8rem; font-weight: 800; color: var(--green); }
+.mix-total code { background: none; padding: 0; font-size: .82rem; }
+
+/* ---- RESULT: 入力と文脈の比較 ------------------------------------------ */
+.compare-block { padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: #fbfdff; }
+.compare-title { margin: 0; font-size: .82rem; font-weight: 800; color: var(--muted); }
+.compare-arrow {
+  padding: 8px 0;
+  text-align: center;
+  font-size: .8rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  color: var(--green);
+}
+.result-reading {
+  margin: 14px 0 0;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border-left: 4px solid var(--green);
+  background: rgba(5,150,105,.07);
+  font-size: .9rem;
+}
+
+/* ---- 06: attention 行列 ------------------------------------------------ */
+.matrix-scroll { overflow-x: auto; padding-bottom: 4px; margin-top: 18px; }
 .matrix {
   display: grid;
   /* 左端は行見出しの列。残りはトークン数ぶんの等幅列。 */
   grid-template-columns: minmax(5.5rem, auto) repeat(var(--token-count, 4), minmax(5rem, 1fr));
   gap: 4px;
-  min-width: 32rem;
+  min-width: 30rem;
 }
 .matrix-corner {
   font-size: .68rem;
@@ -325,182 +560,80 @@ h3 { font-size: 1rem; letter-spacing: -.01em; }
 }
 .matrix-cell.in-focus-row { box-shadow: inset 0 0 0 1.5px rgba(24,34,53,.28); }
 .matrix-cell.is-masked { background: repeating-linear-gradient(45deg, #eef2f8, #eef2f8 5px, #e3e9f2 5px, #e3e9f2 10px); color: #9aa4b2; }
-.matrix-caption { margin: 14px 0 0; color: var(--muted); font-size: .86rem; }
+.matrix-caption { margin: 14px 0 4px; color: var(--muted); font-size: .86rem; }
+.matrix-hint { margin: 0 0 16px; color: var(--green); font-size: .82rem; font-weight: 700; }
 
-/* ---- 計算ステップ ------------------------------------------------------ */
-.focus-headline {
-  margin: 4px 0 -6px;
-  font-size: clamp(1.05rem, 2.4vw, 1.3rem);
-}
-.steps { display: flex; flex-direction: column; gap: 18px; }
-.step-number {
-  margin: 0 0 2px;
-  font-size: .7rem;
-  font-weight: 800;
-  letter-spacing: .12em;
-  color: var(--green);
-}
-.step h3 { margin: 0 0 8px; }
-.step-lead { margin: 0 0 14px; font-size: .9rem; color: #33415c; }
-.step-note { margin: 14px 0 0; font-size: .84rem; color: var(--muted); }
-.step-result { border-color: rgba(5,150,105,.35); }
-
-.step-formula {
-  margin: 0 0 8px;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: .84rem;
-  color: #1f2c44;
-  overflow-x: auto;
-  white-space: nowrap;
-}
-
-/* ---- 軸ラベル付きベクトル表示 ------------------------------------------ */
-.vector-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.chip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 7px;
-  padding: 5px 11px;
-  border-radius: 9px;
-  border: 1px solid var(--line);
-  background: #fff;
-}
-.chip-label { font-size: .74rem; font-weight: 700; color: var(--muted); }
-.chip-value { font-family: "SFMono-Regular", Consolas, monospace; font-size: .86rem; font-variant-numeric: tabular-nums; }
-.chip.is-peak { border-color: var(--green); background: rgba(5,150,105,.1); }
-.chip.is-peak .chip-label { color: var(--green); }
-
-/* ---- スコアの表 -------------------------------------------------------- */
-.table-scroll { overflow-x: auto; }
-.score-table { width: 100%; border-collapse: collapse; min-width: 34rem; }
-.score-table th, .score-table td {
-  padding: 9px 10px;
-  text-align: right;
-  border-bottom: 1px solid var(--line);
-  font-variant-numeric: tabular-nums;
-  font-size: .87rem;
-}
-.score-table thead th {
-  text-align: right;
-  font-size: .74rem;
-  font-weight: 800;
-  letter-spacing: .04em;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.score-table td { font-family: "SFMono-Regular", Consolas, monospace; }
-.score-token {
-  text-align: left !important;
-  font-weight: 800;
-  color: var(--token-color);
-}
-.score-weight { font-weight: 800; }
-.score-table tr.is-top { background: rgba(5,150,105,.08); }
-.score-table tr.is-top .score-weight { color: var(--green); }
-
-/* ---- value の合成 ------------------------------------------------------ */
-.mix-row {
+.orientation-note {
   display: grid;
-  grid-template-columns: 5.5rem minmax(4rem, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
-}
-.mix-token { font-weight: 800; font-size: .88rem; color: var(--token-color); }
-.mix-bar { display: block; height: 10px; border-radius: 999px; background: #eef2f8; overflow: hidden; }
-.mix-bar-fill { display: block; height: 100%; border-radius: 999px; background: var(--token-color); }
-.mix-vector {
-  background: none;
-  padding: 0;
-  font-size: .78rem;
-  color: #33415c;
-  white-space: nowrap;
-}
-
-/* ---- 入力と文脈の比較 -------------------------------------------------- */
-.compare-block { padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: #fbfdff; }
-.compare-title { margin: 0; font-size: .82rem; font-weight: 800; color: var(--muted); }
-.compare-arrow {
-  padding: 8px 0;
-  text-align: center;
-  font-size: .8rem;
-  font-weight: 800;
-  letter-spacing: .08em;
-  color: var(--green);
-}
-.result-reading {
-  margin: 14px 0 0;
-  padding: 12px 14px;
+  gap: 4px;
+  padding: 12px 16px;
+  margin: 0 0 16px;
   border-radius: 12px;
-  border-left: 4px solid var(--green);
-  background: rgba(5,150,105,.07);
-  font-size: .9rem;
-}
-
-/* ---- パラメータ表 ------------------------------------------------------ */
-.param-tables {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
-  gap: 16px;
-}
-.param-table { margin: 0; }
-.param-table figcaption {
-  margin-bottom: 6px;
-  font-size: .76rem;
-  font-weight: 800;
-  color: var(--green);
-}
-.param-table table { width: 100%; border-collapse: collapse; }
-.param-table th, .param-table td {
-  padding: 5px 7px;
+  background: #f2f6fb;
   border: 1px solid var(--line);
-  font-size: .76rem;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
 }
-.param-table thead th { background: #f2f6fb; font-weight: 700; color: var(--muted); white-space: nowrap; }
-.param-table tbody th { text-align: left; font-weight: 700; background: #f8fafd; white-space: nowrap; }
-.param-table td { font-family: "SFMono-Regular", Consolas, monospace; }
-.params-note { margin: 16px 0 0; color: var(--muted); font-size: .85rem; }
+.orientation-note p { margin: 0; font-size: .88rem; }
+.orientation-note b { color: var(--green); }
 
-/* ---- 読み方リスト ------------------------------------------------------ */
-.reading-list { margin: 14px 0 0; padding-left: 1.15rem; display: grid; gap: 10px; }
-.reading-list li { font-size: .91rem; }
+.reading-title { margin: 22px 0 10px; }
+.reading-list { margin: 0 0 16px; padding-left: 1.15rem; display: grid; gap: 10px; }
+.reading-list li { font-size: .9rem; }
 .reading-list b { color: var(--green); }
-.reading-note { margin: 16px 0 0; color: var(--muted); font-size: .85rem; }
 
-/* ---- 前後にあるもの ---------------------------------------------------- */
-.context-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin-top: 16px;
-}
-.context-item { padding-top: 12px; border-top: 3px solid var(--line); }
-.context-item h3 { margin: 0 0 6px; color: var(--green); }
-.context-item p { margin: 0; font-size: .88rem; }
-/* このページが本物と違う点の断り書き。本文と区別できるよう一段落として囲む。 */
-.context-caveat {
-  margin-top: 10px !important;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(234,88,12,.08);
-  border-left: 3px solid var(--orange);
-  font-size: .84rem !important;
-}
-.context-caveat b { color: var(--orange); }
-
-/* ---- つまずきやすい点 -------------------------------------------------- */
-.pitfall-list { margin: 14px 0 0; }
+/* ---- 07: つまずきやすい点 ---------------------------------------------- */
+.pitfall-list { margin: 16px 0 0; }
 .pitfall-list dt {
-  margin-top: 14px;
+  margin-top: 16px;
   font-weight: 800;
   font-size: .93rem;
   color: var(--ink);
 }
 .pitfall-list dt::before { content: "▸ "; color: var(--green); }
 .pitfall-list dd { margin: 4px 0 0 1.1rem; font-size: .88rem; color: #33415c; }
+
+/* ---- 08: 前後にあるもの（時間順の縦タイムライン） ---------------------- */
+.flow-list {
+  margin: 18px 0 0;
+  padding: 0 0 0 26px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  /* 左端を縦に貫く1本の線。上から下への一方向であることを線で示す。 */
+  border-left: 2px solid var(--line);
+}
+.flow-item { position: relative; }
+.flow-item::before {
+  content: "";
+  position: absolute;
+  left: -33px;
+  top: .55rem;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--line);
+}
+.flow-item.is-here::before { background: var(--green); border-color: var(--green); }
+.flow-when {
+  margin: 0 0 2px;
+  font-size: .7rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  color: var(--muted);
+}
+.flow-item.is-here .flow-when { color: var(--green); }
+.flow-item h3 { margin: 0 0 6px; color: var(--green); }
+.flow-item p { font-size: .89rem; }
+.caveat-inline {
+  margin-top: 10px !important;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(234,88,12,.08);
+  border-left: 3px solid var(--orange);
+  font-size: .85rem !important;
+}
+.caveat-inline b { color: var(--orange); }
 
 /* ---- ナビゲーションとフッタ -------------------------------------------- */
 .back-nav { padding: 4px 0 0; }
@@ -515,21 +648,22 @@ footer {
 }
 
 /* ---- レスポンシブ ------------------------------------------------------ */
-@media (max-width: 980px) {
-  .intro-grid, .role-grid, .context-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 @media (max-width: 720px) {
+  :root { --bar-height: 6.4rem; }
   .hero { padding: 40px 18px 20px; }
   .layout { padding: 8px 18px 32px; }
-  .intro-grid, .role-grid, .context-grid { grid-template-columns: 1fr; }
-  .lab-toolbar { flex-direction: column; gap: 18px; }
+  .walk-bar-inner { border-radius: 18px; }
+  .focus-headline { margin-left: 0; width: 100%; }
   .mix-row { grid-template-columns: 1fr; gap: 6px; }
   .mix-vector { white-space: normal; }
+  .flow-list { padding-left: 20px; }
+  .flow-item::before { left: -27px; }
 }
 @media (max-width: 520px) {
-  .intro-formula code, .formula-block code { font-size: .76rem; }
-  .matrix { min-width: 26rem; gap: 3px; }
+  .formula-block code { font-size: .76rem; }
+  .matrix { min-width: 24rem; gap: 3px; }
   .matrix-cell { padding: 10px 2px; font-size: .8rem; }
+  .section-badge { display: block; margin: 0 0 6px; width: fit-content; }
 }
 
 /* アニメーションを望まない環境では色や幅の遷移を止める */

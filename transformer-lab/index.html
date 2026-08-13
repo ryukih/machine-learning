@@ -9,22 +9,50 @@
     数値・行列・計算はすべて app.js が持ち、このファイルには計算に関わる値を書かない。
     本文中の数式は記号だけを示し、具体的な数字は app.js が流し込む。
 
+  【ページ設計の原則 — 一本道であること】
+    このページの目的は Q・K・V という概念を具体例で理解することであり、
+    情報を網羅することではない。したがって次の2点を守る。
+
+      1. 横並びのグリッドを作らない。
+         読者が「どれから読むか」を選ばされる時点で順序が壊れる。
+         並列に見える要素（Q/K/V の3役、前後にある処理）も縦に積み、
+         上から順に読めば理解が深まる配置にする。
+
+      2. 節は 01 → 08 の一方向に進み、後ろの節は前の節の結果だけを使う。
+
+           01  何を作りたいのか（x → z）
+           02  なぜ Q, K, V の3つに分けるのか
+           03  入力 X を用意する
+           04  3つの射影で Q, K, V を作る
+           05  1語を選んで最後まで追う（STEP 1〜4 → RESULT）
+           06  4語ぶん並べると attention 行列になる
+           07  つまずきやすい点
+           08  この計算の前後にあるもの
+
+         4×4 の attention 行列を 06 に置いているのは意図的である。
+         行列は「05 の計算を4語ぶん繰り返した結果」であり、
+         先に見せると、まだ理解していない量を俯瞰させることになる。
+
   【app.js との対応】
     次の id が app.js の ELEMENT_IDS から参照される。変更する場合は両方を直すこと。
 
-        tokenButtons      注目する語を選ぶボタン列（app.js が生成）
-        scaleToggle       √d_k で割るかどうかの切り替え
-        maskToggle        因果マスク（GPT型）の切り替え
-        attentionMatrix   4×4 の attention 行列
-        matrixCaption     行列の読み方（トグルの状態で文面が変わる）
-        focusHeadline     いま注目している語の見出し
-        queryStep         STEP1 の内容
-        scoreTableHead    STEP2/3 の表のうち、割るかどうかで文言が変わる列見出し
-        scoreTableBody    STEP2/3 の表の中身
-        valueMixing       STEP4 の value 合成
-        vectorCompare     入力ベクトルと文脈ベクトルの比較
-        resultReading     結果の読み方の1文
-        parameterTables   使用したすべての行列の表
+        parameterTables    04 に置く行列表（X, W^Q, W^K, W^V）
+        tokenButtons       注目する語を選ぶボタン列（app.js が生成）
+        focusHeadline      いま注目している語（sticky バーの中）
+        walkthrough        05 の先頭。行列の行見出しから戻るときのスクロール先
+        queryStep          STEP1 の内容
+        scaleToggle        √d_k で割るかどうかの切り替え（STEP2 の中）
+        scoreTableBody     STEP2 の表（内積とスケーリング）
+        scaledScoreHead    STEP2 の表のうち、割るかどうかで文言が変わる列見出し
+        softmaxTableBody   STEP3 の表（softmax の中身）
+        softmaxTableFoot   STEP3 の表の合計行（和が 1 になることを見せる）
+        valueMixing        STEP4 の value 合成
+        vectorCompare      RESULT の入力ベクトルと文脈ベクトルの比較
+        resultReading      RESULT の読み方の1文
+        maskToggle         因果マスク（GPT型）の切り替え（06 の中）
+        attentionMatrix    4×4 の attention 行列
+        matrixCaption      行列の読み方（トグルの状態で文面が変わる）
+        readingList        4語ぶんの読み方（トグルの状態に追従する）
 
   【数式の書き方の規約】
     外部ライブラリを使わない方針のため、KaTeX や MathJax は読み込まない。
@@ -41,7 +69,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="Transformer の self-attention を、I like playing football の4語で Q・K・V から文脈ベクトルまで実際に数値計算して追う教材" />
+  <meta name="description" content="Transformer の self-attention を、I like playing football の4語で Q・K・V から文脈ベクトルまで、上から順に一本道で追う教材" />
   <title>Transformer Lab</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -53,325 +81,359 @@
       <p class="lead">
         <strong>Q</strong> と <strong>K</strong> が「どの語をどれだけ見るか」を決め、
         <strong>V</strong> が「そこから何を持ってくるか」を運ぶ。
-        <code>I like playing football</code> の4語で、4つの文脈ベクトルができるまでを実際に計算します。
+        <code>I like playing football</code> の4語で、この3つが何をしているのかを
+        <strong>上から順に一度だけ</strong>追いかけます。
       </p>
-      <div class="concept-chain" aria-label="計算の流れ">
-        <span>埋め込み</span><b>→</b><span>Q, K, V</span><b>→</b><span>スコア</span><b>→</b><span>softmax</span><b>→</b><span>重み付き和</span>
-      </div>
 
       <!--
-        このページの位置づけを最初に示す枠。self-attention の定義・本デモの役割・
-        本物のモデルとの差（重みが学習済みでないこと）の3点で構成する。
+        このページの通り道。読者に「どこから読むか」を選ばせないための地図であり、
+        目次ではない。各項目は下の節へのアンカーになっている。
       -->
-      <section class="intro card" aria-label="このページについて">
-        <h2>このページについて</h2>
-        <p class="intro-sub">Transformer の中心にある <code>self-attention</code> を、4語の文で最後まで手計算できる大きさに縮めた教材です。</p>
+      <nav class="roadmap" aria-label="このページの道すじ">
+        <p class="roadmap-title">この順に進みます</p>
+        <ol>
+          <li><a href="#s01"><b>01</b> 何を作りたいのか — <code>x</code> から <code>z</code> へ</a></li>
+          <li><a href="#s02"><b>02</b> なぜ <code>Q</code>, <code>K</code>, <code>V</code> の3つに分けるのか</a></li>
+          <li><a href="#s03"><b>03</b> 入力 <code>X</code> を用意する</a></li>
+          <li><a href="#s04"><b>04</b> 3つの射影で <code>Q</code>, <code>K</code>, <code>V</code> を作る</a></li>
+          <li><a href="#s05"><b>05</b> 1語を選んで最後まで追う（数値デモ）</a></li>
+          <li><a href="#s06"><b>06</b> 4語ぶん並べると attention 行列になる</a></li>
+          <li><a href="#s07"><b>07</b> つまずきやすい点</a></li>
+          <li><a href="#s08"><b>08</b> この計算の前後にあるもの</a></li>
+        </ol>
+      </nav>
 
-        <div class="intro-grid">
-          <article class="intro-item intro-what">
-            <h3>self-attention とは</h3>
-            <p>
-              文の中の各語が、<strong>同じ文の他のすべての語を見に行き</strong>、
-              自分にとって必要な情報だけを取り込んで自分のベクトルを作り直す仕組みです。
-              取り込む配分を決めるのが <code>Q</code> と <code>K</code>、
-              取り込まれる中身が <code>V</code> です。
-            </p>
-            <div class="intro-formula">
-              <code>Attention(Q, K, V) = softmax(Q Kᵀ ⁄ √d_k) V</code>
-            </div>
-          </article>
-
-          <article class="intro-item intro-role">
-            <h3>このページの役割</h3>
-            <p>
-              式の各記号が<strong>どの数字なのか</strong>を、途中まで丸めずに全部見せます。
-              語を1つ選ぶと、その語の <code>q</code> が作られ、4つの <code>k</code> と内積を取り、
-              <code>softmax</code> で配分になり、その配分で <code>v</code> が混ざって
-              <code>z</code> になるまでが1画面に並びます。
-            </p>
-          </article>
-
-          <article class="intro-item intro-caveat">
-            <h3>本物のモデルとの違い</h3>
-            <p>
-              ここで使う <code>W^Q</code>, <code>W^K</code>, <code>W^V</code> は
-              <strong>学習で得た値ではありません</strong>。電卓で追える大きさに収め、
-              「主語は述語を探す」「動詞は目的語を探す」という関係が現れるように手で書いた値です。
-              次元も <code>d_model = 4</code>, <code>d_k = 2</code> と極端に小さく、head も1つだけです。
-            </p>
-            <p class="intro-note">
-              実際のモデルは <code>d_model</code> が数百〜数千、head が数十あります。
-              また、<code>q</code>・<code>k</code>・<code>v</code> の各軸に人間が読める意味はありません。
-              このページも軸に意味を持たせず「軸1」「軸2」と番号でだけ呼びます。
-            </p>
-          </article>
-        </div>
-      </section>
+      <div class="caveat">
+        <p>
+          <b>先に断っておくこと。</b>
+          ここで使う <code>W^Q</code>, <code>W^K</code>, <code>W^V</code> は
+          <strong>学習で得た値ではありません</strong>。電卓で追える大きさに収め、
+          「主語は述語を探す」「動詞は目的語を探す」という関係が現れるように手で書いた値です。
+          次元も <code>d_model = 4</code>, <code>d_k = 2</code> と極端に小さく、head は1つだけ、
+          位置符号も足していません。示したいのは値そのものではなく、
+          <strong>値がどう流れて文脈ベクトルになるか</strong>です。
+        </p>
+      </div>
     </div>
   </header>
 
   <main class="layout">
 
     <!-- ================================================================
-         1. Q, K, V を3つに分ける理由
+         01. 何を作りたいのか
+         ここでは Q・K・V をまだ出さない。先に「出力が何であるか」だけを決める。
          ================================================================ -->
-    <section class="card section-qkv">
-      <h2>なぜ Q, K, V の3つに分けるのか</h2>
+    <section class="card" id="s01">
+      <h2><span class="section-badge">01</span>何を作りたいのか — <code>x</code> から <code>z</code> へ</h2>
+      <p>
+        self-attention は、文の中の各語が<strong>同じ文の他のすべての語を見に行き</strong>、
+        自分にとって必要な情報だけを取り込んで、自分のベクトルを作り直す仕組みです。
+        入口と出口だけを書くと、やりたいことは1行で済みます。
+      </p>
+      <div class="formula-block">
+        <code>x_playing  ← "playing" という語だけの情報を持つベクトル（周りを何も知らない）</code>
+        <code>    ↓  self-attention</code>
+        <code>z_playing  ← 同じ "playing" だが、周りの語から必要な分を取り込んだベクトル</code>
+      </div>
+      <p>
+        重要なのは、<strong><code>z</code> が語ではなく「その文脈に置かれたその語」を表す</strong>ことです。
+        同じ <code>playing</code> でも、後ろが <code>football</code> か <code>the piano</code> かで
+        <code>z</code> は別のベクトルになります。この「作り直し」の中身が、以降の 02〜05 です。
+      </p>
+      <p class="note">
+        例文は <code>I like playing football</code> の4語に固定します。
+        実際のトークナイザは句点も1トークンに数え、語によってはサブワードに割りますが、
+        ここでは計算そのものに集中するため4語に簡略化しています。
+      </p>
+    </section>
+
+    <!-- ================================================================
+         02. Q, K, V を3つに分ける理由
+         3つの役割は本来「並列」だが、縦に積んで Q → K → V の順に読ませる。
+         ================================================================ -->
+    <section class="card" id="s02">
+      <h2><span class="section-badge">02</span>なぜ <code>Q</code>, <code>K</code>, <code>V</code> の3つに分けるのか</h2>
       <p>
         3つとも<strong>同じ入力から作られます</strong>。同じものから3つ作るのは無駄に見えますが、
-        役割が違います。図書館で本を探す場面に当てはめると分かりやすくなります。
+        役割が違います。図書館で本を探す場面に当てはめると、順番に納得できます。
       </p>
-      <div class="role-grid">
-        <article class="role role-q">
-          <p class="role-symbol">Q</p>
-          <h3>Query — 何を探しているか</h3>
+
+      <ol class="role-stack">
+        <li class="role role-q">
+          <p class="role-symbol">Q<span>Query</span></p>
+          <h3>何を探しているか</h3>
           <p>
             自分が文脈から何を補いたいかを表すベクトル。検索窓に打ち込む言葉にあたります。
-            <code>q_i = x_i W^Q</code>
+            語ごとに1本あり、<code>q_i = x_i W^Q</code> で作ります。
           </p>
-        </article>
-        <article class="role role-k">
-          <p class="role-symbol">K</p>
-          <h3>Key — 自分は何として差し出せるか</h3>
+        </li>
+        <li class="role role-k">
+          <p class="role-symbol">K<span>Key</span></p>
+          <h3>自分は何として差し出せるか</h3>
           <p>
             他の語から見つけてもらうための見出し。本の背表紙にあたります。
-            <code>q</code> との内積で噛み合いを測るため、<code>k</code> は <code>q</code> と同じ次元 <code>d_k</code> に住みます。
-            <code>k_j = x_j W^K</code>
+            <code>q</code> との内積で噛み合いを測るので、<code>k</code> は <code>q</code> と
+            <strong>同じ次元 <code>d_k</code> に住まなければなりません</strong>。<code>k_j = x_j W^K</code>。
           </p>
-        </article>
-        <article class="role role-v">
-          <p class="role-symbol">V</p>
-          <h3>Value — 実際に渡す中身</h3>
+        </li>
+        <li class="role role-v">
+          <p class="role-symbol">V<span>Value</span></p>
+          <h3>実際に渡す中身</h3>
           <p>
             見つけてもらったときに相手へ渡す情報。本の中身にあたります。
             背表紙と中身が別物でよいのと同じで、<code>k</code> と <code>v</code> は違うベクトルです。
-            <code>v_j = x_j W^V</code>
+            <code>v_j = x_j W^V</code>。
           </p>
-        </article>
-      </div>
-      <div class="callout callout-key">
+        </li>
+      </ol>
+
+      <div class="callout">
         <p>
-          ここが最も間違えやすい点です。<strong>重みが掛かる先は <code>V</code> であって、
-          埋め込み <code>X</code> そのものではありません。</strong>
-          <code>q·k</code> は「どれだけ見るか」だけを決め、「何を持ってくるか」は <code>V</code> が担います。
-          この2つを分けられることが、Q・K・V を3つに分ける理由です。
+          <b>ここが最も間違えやすい点です。</b>
+          <strong>重みが掛かる先は <code>V</code> であって、埋め込み <code>X</code> そのものではありません。</strong>
+          <code>q·k</code> は「どれだけ見るか」<em>だけ</em>を決め、「何を持ってくるか」は <code>V</code> が担います。
+          この2つを独立に学習できることが、3つに分ける唯一にして最大の理由です。
         </p>
+      </div>
+
+      <p>
+        式にすると、これだけです。以降の節は、この1行の中身を左から順に開いていく作業になります。
+      </p>
+      <div class="formula-block">
+        <code>Attention(Q, K, V) = softmax( Q Kᵀ ⁄ √d_k ) V</code>
       </div>
     </section>
 
     <!-- ================================================================
-         2. 数式
+         03. 入力 X
          ================================================================ -->
-    <section class="card section-math">
-      <h2>式で書くと</h2>
+    <section class="card" id="s03">
+      <h2><span class="section-badge">03</span>入力 <code>X</code> を用意する</h2>
       <p>
         文のトークン数を <code>n = 4</code>、埋め込みの次元を <code>d_model</code> として、
         入力を行列 <code>X ∈ ℝ^(n×d_model)</code> に並べます。<strong>行が1つの語</strong>です。
         このページでは <code>X</code> を<strong>単位行列</strong>にしています。
-        第 <code>t</code> 軸は「その語が <code>t</code> 番目の語かどうか」だけを表し、
-        それ以外の意味を持ちません。
+        第 <code>t</code> 軸は「その語が <code>t</code> 番目の語かどうか」だけを表し、それ以外の意味を持ちません。
       </p>
       <div class="formula-block">
-        <code>          I  like play foot</code>
+        <code>             I  like play foot</code>
         <code>x_I        = [ 1,  0,  0,  0 ]</code>
         <code>x_like     = [ 0,  1,  0,  0 ]</code>
         <code>x_playing  = [ 0,  0,  1,  0 ]</code>
         <code>x_football = [ 0,  0,  0,  1 ]</code>
       </div>
       <p>
-        こうしておくと <code>x_t W</code> は「<code>W</code> の第 <code>t</code> 行を取り出す」ことと同じになります。
+        軸に「人」「動作」のような意味を割り当てないのは、実際のモデルでも
+        <strong>軸に人間が読める意味はない</strong>からです。意味を持つのは軸ではなく、
+        内積の大小と、混ざった結果のベクトルのほうです。
+      </p>
+      <p>
+        この形にしておくと <code>x_t W</code> は「<code>W</code> の第 <code>t</code> 行を取り出す」ことと同じになります。
         つまり <strong><code>W^Q</code> の <code>playing</code> 行が、そのまま <code>playing</code> の query</strong> です。
         実際のモデルの埋め込み表引きも、内部的にはこれと同じ演算です。
       </p>
+    </section>
 
-      <p>まず、同じ <code>X</code> を3通りに線形射影します。</p>
-      <div class="formula-block">
-        <code>Q = X W^Q    W^Q ∈ ℝ^(d_model×d_k)</code>
-        <code>K = X W^K    W^K ∈ ℝ^(d_model×d_k)</code>
-        <code>V = X W^V    W^V ∈ ℝ^(d_model×d_v)</code>
-      </div>
-
+    <!-- ================================================================
+         04. 3つの射影と、その中身（パラメータ表）
+         表は「使う場所」に置く。末尾にまとめて置くと、読者が上下に往復することになる。
+         ================================================================ -->
+    <section class="card" id="s04">
+      <h2><span class="section-badge">04</span>3つの射影で <code>Q</code>, <code>K</code>, <code>V</code> を作る</h2>
       <p>
-        次に、<strong>語 i の query</strong> と <strong>語 j の key</strong> の内積でスコアを作ります。
-        <code>√d_k</code> で割るのは、次元が大きいほど内積の分散が <code>d_k</code> に比例して
-        大きくなり、softmax が飽和して勾配がほぼ消えてしまうためです。
+        02 で決めた3つの役割を、同じ <code>X</code> への3通りの線形射影として作ります。
+        違うのは掛ける行列だけです。
       </p>
       <div class="formula-block">
-        <code>s_ij = (q_i · k_j) ⁄ √d_k        ← 語 i から見た語 j の関連度</code>
-        <code>a_i: = softmax(s_i:)              ← 行ごとに正規化。Σ_j a_ij = 1</code>
+        <code>Q = X W^Q    W^Q ∈ ℝ^(d_model×d_k)    d_k = 2</code>
+        <code>K = X W^K    W^K ∈ ℝ^(d_model×d_k)    d_k = 2   ← q と内積を取るので同じ次元</code>
+        <code>V = X W^V    W^V ∈ ℝ^(d_model×d_v)    d_v = 4   ← 次元は q, k と違ってよい</code>
+      </div>
+      <p>
+        使う値をここで全部出します。<code>X</code> が one-hot なので、
+        <strong>下の3つの重み行列は「語ごとの query / key / value の一覧表」としてそのまま読めます</strong>。
+      </p>
+
+      <div id="parameterTables" class="param-stack"></div>
+
+      <p class="note">
+        <code>X</code> が単位行列なので、計算後の <code>Q</code>, <code>K</code>, <code>V</code> は
+        それぞれ <code>W^Q</code>, <code>W^K</code>, <code>W^V</code> と<strong>数値がまったく同じ表になります</strong>。
+        行列の掛け算が表引きに退化しているだけで、式は何も変わっていません。
+        一方で <code>W^V</code> の各行は one-hot ではありません。
+        この <strong><code>v_j ≠ x_j</code></strong> が、02 の
+        「重みが掛かる先は <code>V</code> であって埋め込みではない」の具体的な中身です。
+      </p>
+    </section>
+
+    <!-- ================================================================
+         05. 数値デモ本体 — 1語ぶんを最後まで
+         ここが本題。STEP 1 → 2 → 3 → 4 → RESULT を縦に一列で通す。
+         ================================================================ -->
+    <section class="walkthrough" id="s05" aria-label="1語を選んで最後まで追う">
+      <div class="card walkthrough-intro">
+        <h2><span class="section-badge">05</span>1語を選んで最後まで追う</h2>
+        <p>
+          ここからが本題です。<strong>1語だけ</strong>を選び、その語の <code>z</code> ができるまでを
+          STEP 1 から RESULT まで、途中の数字を丸めずに順に見ます。
+          既定は <code>playing</code> です。まずはこのまま下へ読み進めてください。
+        </p>
       </div>
 
+      <!-- 語の切り替えは STEP を読みながらでもできるよう、画面上端に貼り付く -->
+      <div class="walk-bar" id="walkthrough">
+        <div class="walk-bar-inner">
+          <p class="walk-bar-label">注目する語</p>
+          <div class="token-picker" id="tokenButtons" role="group" aria-label="注目する語"></div>
+          <p class="focus-headline" id="focusHeadline"></p>
+        </div>
+      </div>
+
+      <article class="card step">
+        <p class="step-number">STEP 1</p>
+        <h3>この語の <code>query</code> を1本作る</h3>
+        <p class="step-lead">
+          埋め込みに <code>W^Q</code> を掛けて、<strong>この語が何を探しているか</strong>を取り出します。
+          <code>x</code> は one-hot なので、この掛け算は <code>W^Q</code> から1行を引くのと同じでした（03）。
+        </p>
+        <div id="queryStep"></div>
+      </article>
+
+      <article class="card step">
+        <p class="step-number">STEP 2</p>
+        <h3>4つの <code>key</code> すべてと内積を取る</h3>
+        <p class="step-lead">
+          STEP 1 で作った <code>q</code> と、4語ぶんの <code>k</code> の内積を取ります。
+          <strong>自分自身の key とも取ります</strong>（self-attention なので自分も参照先の候補です）。
+          内積が大きいほど「噛み合っている」ことになります。
+        </p>
+        <div class="table-scroll">
+          <table class="score-table">
+            <thead>
+              <tr>
+                <th scope="col">相手 j</th>
+                <th scope="col">k_j</th>
+                <th scope="col">q · k_j（生）</th>
+                <th scope="col" id="scaledScoreHead">s_ij = q·k ⁄ √d_k</th>
+              </tr>
+            </thead>
+            <tbody id="scoreTableBody"></tbody>
+          </table>
+        </div>
+        <label class="switch inline-switch">
+          <input type="checkbox" id="scaleToggle" checked />
+          <span><code>√d_k</code> で割る</span>
+        </label>
+        <p class="step-note">
+          <code>√d_k</code> で割るのは温度調整ではなく<strong>分散の補正</strong>です。
+          <code>q</code> と <code>k</code> の各成分が独立で分散 1 なら内積の分散は <code>d_k</code> になり、
+          次元が大きいほど次の softmax が飽和して勾配がほぼ消えます。
+          <code>√d_k</code> で割ると分散が 1 に戻ります。
+          上のチェックを外すと、割らない場合に配分が鋭くなる（1語に偏る）ことが下で確認できます。
+        </p>
+      </article>
+
+      <article class="card step">
+        <p class="step-number">STEP 3</p>
+        <h3><code>softmax</code> で「配分」に変える</h3>
+        <p class="step-lead">
+          STEP 2 のスコアはまだ大小がばらばらの実数です。これを
+          <strong>足して 1 になる比率</strong>に直すのが softmax です。
+          最大値を引いてから指数を取っているのは、指数のオーバーフローを避けるためで、結果は変わりません。
+        </p>
+        <div class="table-scroll">
+          <table class="score-table">
+            <thead>
+              <tr>
+                <th scope="col">相手 j</th>
+                <th scope="col">s_ij</th>
+                <th scope="col">exp(s_ij − max)</th>
+                <th scope="col">a_ij = exp ⁄ Σexp</th>
+              </tr>
+            </thead>
+            <tbody id="softmaxTableBody"></tbody>
+            <tfoot id="softmaxTableFoot"></tfoot>
+          </table>
+        </div>
+        <p class="step-note">
+          最終列の合計が <code>1.000</code> になっていることを確かめてください。
+          この <code>a_i:</code> が「語 <code>i</code> が文脈を作るときに、どこをどれだけ見るか」の配分です。
+        </p>
+      </article>
+
+      <article class="card step">
+        <p class="step-number">STEP 4</p>
+        <h3>その配分で <code>value</code> を混ぜる</h3>
+        <p class="step-lead">
+          棒の長さが <code>a_ij</code>、右の式が実際に足し込まれた <code>a_ij · v_j</code> です。
+          <strong>混ざっているのは <code>v</code> であり、埋め込み <code>x</code> ではありません。</strong>
+          4本を足し合わせたものが、この語の文脈ベクトル <code>z_i = Σ_j a_ij v_j</code> です。
+        </p>
+        <div id="valueMixing"></div>
+      </article>
+
+      <article class="card step step-result">
+        <p class="step-number">RESULT</p>
+        <h3>入る前と出た後を比べる</h3>
+        <div id="vectorCompare"></div>
+        <p class="result-reading" id="resultReading"></p>
+        <p class="step-note">
+          <code>x</code> は「その語かどうか」だけの軸、<code>z</code> は value 空間の軸で、
+          住んでいる空間が違います。実際のモデルはこのあと <code>W^O</code> で
+          元の <code>d_model</code> 次元へ戻し、残差接続で <code>x</code> に足し込みます（08）。
+        </p>
+      </article>
+    </section>
+
+    <!-- ================================================================
+         06. 4語ぶん = 行列
+         05 を4回繰り返した結果として行列を導入する。順序を逆にしないこと。
+         ================================================================ -->
+    <section class="card" id="s06">
+      <h2><span class="section-badge">06</span>4語ぶん並べると attention 行列になる</h2>
       <p>
-        最後に、その配分で <strong>value を混ぜます</strong>。これが語 <code>i</code> の文脈ベクトルです。
+        05 でやったのは <strong>1行ぶん</strong>の計算です。同じことを4語すべてについて行い、
+        配分 <code>a_i:</code> を縦に積むと <code>4×4</code> の行列になります。これが
+        <code>softmax(Q Kᵀ ⁄ √d_k)</code> の正体で、新しい計算は何も増えていません。
       </p>
       <div class="formula-block">
-        <code>z_i = Σ_j a_ij v_j</code>
-        <code>Z   = A V = softmax(Q Kᵀ ⁄ √d_k) V</code>
+        <code>a_i: = softmax(s_i:)            ← 05 でやったこと（1行ぶん）</code>
+        <code>A    = softmax(Q Kᵀ ⁄ √d_k)     ← それを4語ぶん積んだもの</code>
+        <code>Z    = A V                      ← 文脈ベクトルも4本まとめて出る</code>
       </div>
 
-      <p>
-        <code>softmax(Q Kᵀ ⁄ √d_k)</code> は <code>4×4</code> の行列で、
-        <strong>その第 i 行が語 i の重み配分</strong>です。行と列で役割が違うことに注意してください。
-      </p>
+      <label class="switch inline-switch">
+        <input type="checkbox" id="maskToggle" />
+        <span>因果マスク（GPT型）を掛ける</span>
+      </label>
+
+      <div class="matrix-scroll">
+        <div class="matrix" id="attentionMatrix" aria-label="attention 重み行列。行が query 側の語、列が key 側の語。"></div>
+      </div>
+      <p class="matrix-caption" id="matrixCaption"></p>
+      <p class="matrix-hint">行の見出しをクリックすると、その語で 05 を計算し直します。</p>
+
       <div class="orientation-note">
         <p><b>行 i</b> = 「語 i が文脈を作るために、どこをどれだけ見たか」（和が 1）</p>
         <p><b>列 j</b> = 「語 j が、他のどの語からどれだけ見られたか」（和は 1 にならない）</p>
       </div>
       <p>
-        <code>I</code>, <code>like</code>, <code>playing</code>, <code>football</code> の4語それぞれについて
-        1本ずつ <code>z_i</code> ができます。<strong>同じ語でも、周りの語が変われば <code>z</code> は変わります。</strong>
-        これが「文脈が反映されたベクトル」という言い方の中身です。
+        行と列で役割が違うことに注意してください。行列は<strong>対称ではありません</strong>。
+        <code>W^Q ≠ W^K</code> なので、「A が B を見る強さ」と「B が A を見る強さ」は別物です。
       </p>
-    </section>
 
-    <!-- ================================================================
-         3. 数値デモ本体
-         ================================================================ -->
-    <section class="lab-section" aria-label="数値デモ">
-      <div class="lab-toolbar card">
-        <div class="toolbar-block">
-          <p class="toolbar-label">注目する語を選ぶ</p>
-          <div class="token-picker" id="tokenButtons" role="group" aria-label="注目する語"></div>
-        </div>
-        <div class="toolbar-block">
-          <p class="toolbar-label">計算の設定</p>
-          <div class="switches">
-            <!-- 既定は「割る」。app.js の state.useScaling と一致させておく。 -->
-            <label class="switch">
-              <input type="checkbox" id="scaleToggle" checked />
-              <span>√d_k で割る</span>
-            </label>
-            <label class="switch">
-              <input type="checkbox" id="maskToggle" />
-              <span>因果マスク（GPT型）</span>
-            </label>
-          </div>
-        </div>
-      </div>
+      <h3 class="reading-title">4行をそれぞれどう読むか</h3>
+      <ul class="reading-list" id="readingList"></ul>
 
-      <section class="card matrix-card">
-        <div class="card-header">
-          <h2>attention 行列 <code>A = softmax(Q Kᵀ ⁄ √d_k)</code></h2>
-          <p>行見出しをクリックすると、その語の計算が下に展開されます。</p>
-        </div>
-        <div class="matrix-scroll">
-          <div class="matrix" id="attentionMatrix" aria-label="attention 重み行列。行が query 側の語、列が key 側の語。"></div>
-        </div>
-        <p class="matrix-caption" id="matrixCaption"></p>
-      </section>
-
-      <h2 class="focus-headline" id="focusHeadline"></h2>
-
-      <div class="steps">
-        <article class="card step">
-          <p class="step-number">STEP 1</p>
-          <h3>この語の query を作る</h3>
-          <p class="step-lead">
-            埋め込みに <code>W^Q</code> を掛けて、<strong>この語が何を探しているか</strong>を取り出します。
-            <code>x</code> は one-hot なので、この掛け算は <code>W^Q</code> から1行を引くのと同じです。
-          </p>
-          <div id="queryStep"></div>
-        </article>
-
-        <article class="card step">
-          <p class="step-number">STEP 2 &amp; 3</p>
-          <h3>4つの key すべてと内積を取り、softmax で配分にする</h3>
-          <p class="step-lead">
-            自分自身の key とも内積を取ります（self-attention なので自分も参照先の候補です）。
-            最終列の和が <code>1</code> になっていることを確かめてください。
-          </p>
-          <div class="table-scroll">
-            <table class="score-table">
-              <thead>
-                <tr>
-                  <th scope="col">相手 j</th>
-                  <th scope="col">k_j</th>
-                  <th scope="col">q·k（生）</th>
-                  <th scope="col" id="scoreTableHead">q·k ÷ √d_k</th>
-                  <th scope="col">a_ij（softmax後）</th>
-                </tr>
-              </thead>
-              <tbody id="scoreTableBody"></tbody>
-            </table>
-          </div>
-        </article>
-
-        <article class="card step">
-          <p class="step-number">STEP 4</p>
-          <h3>その配分で value を混ぜる</h3>
-          <p class="step-lead">
-            棒の長さが <code>a_ij</code>、右の式が実際に足し込まれた <code>a_ij · v_j</code> です。
-            <strong>混ざっているのは <code>v</code> であり、埋め込み <code>x</code> ではありません。</strong>
-          </p>
-          <div id="valueMixing"></div>
-        </article>
-
-        <article class="card step step-result">
-          <p class="step-number">RESULT</p>
-          <h3>入力ベクトルと文脈ベクトルを比べる</h3>
-          <div id="vectorCompare"></div>
-          <p class="result-reading" id="resultReading"></p>
-          <p class="step-note">
-            <code>x</code> は「その語かどうか」だけの軸、<code>z</code> は value 空間の軸で、
-            住んでいる空間が違います。実際のモデルはこのあと <code>W^O</code> で
-            元の <code>d_model</code> 次元へ戻し、残差接続で <code>x</code> に足し込みます。
-            下の「この計算の前後に起きること」を参照してください。
-          </p>
-        </article>
-      </div>
-
-      <section class="card params-card">
-        <div class="card-header">
-          <h2>使用したパラメータと途中結果</h2>
-          <p>すべての行列を隠さずに載せます。上の数値はすべてここから計算されています。</p>
-        </div>
-        <div id="parameterTables" class="param-tables"></div>
-        <p class="params-note">
-          <code>X</code> が単位行列なので、<code>Q</code>, <code>K</code>, <code>V</code> は
-          それぞれ <code>W^Q</code>, <code>W^K</code>, <code>W^V</code> と<strong>同じ表になります</strong>。
-          行列の掛け算が表引きに退化しているだけで、式は何も変わっていません。
-          一方 <code>V</code> の各行は one-hot ではありません。
-          <strong><code>v_j ≠ x_j</code> であること</strong>が、
-          「重みが掛かる先は <code>V</code> であって埋め込みではない」の具体的な中身です。
-          なお、このページは位置符号を足していません（次節を参照）。
-        </p>
-      </section>
-    </section>
-
-    <!-- ================================================================
-         4. 4語ぶんの読み方
-         ================================================================ -->
-    <section class="card section-reading">
-      <h2>4つの文脈ベクトルをどう読むか</h2>
       <p>
-        4語すべてを順にクリックすると、同じ計算が4回行われて4本の <code>z</code> が並びます。
-        既定の設定では、次のような読み方になります。
+        <strong>ここで因果マスクを入れてみてください。</strong>
+        <code>j &gt; i</code> のスコアが <code>−∞</code> になって行列の右上が消え、各行の配分が計算し直されます。
+        たとえば <code>playing</code> は <code>football</code> が見えなくなるので、
+        配分も <code>z_playing</code> も別のものになります。
+        <strong>語は同じでも、参照できる文脈が変われば <code>z</code> は変わる</strong> —
+        01 で述べたことの、最も直接的な確認方法です。
       </p>
-      <p>
-        入る前の <code>x</code> は、どれも<strong>自分の軸だけが 1</strong> の、周りを何も知らないベクトルでした。
-        出てきた <code>z</code> は、<strong>4本の <code>v</code> を配分どおりに混ぜたベクトル</strong>です。
-        この違いが「文脈が反映された」という言い方の中身です。
-      </p>
-      <ul class="reading-list">
-        <li><b>I</b> は述語を探すので <code>like</code> を <code>0.730</code> 参照します（主語 → 述語）。
-          <code>z_I = 0.125·v_I + 0.730·v_like + 0.125·v_playing + 0.021·v_football</code>。
-          中身の 73% が <code>like</code> から来ています。</li>
-        <li><b>like</b> は目的語を探すので <code>playing</code> を <code>0.730</code> 参照します（動詞 → 目的語）。
-          <code>I like playing</code> の結びつきがそのまま数字に出ています。</li>
-        <li><b>playing</b> も目的語を探し、<code>football</code> を <code>0.730</code> 参照します。
-          <code>z_playing</code> は <code>v_football</code> が支配的な混合になります。
-          <strong>同じ <code>playing</code> でも、後ろが <code>tennis</code> なら別のベクトルになります。</strong></li>
-        <li><b>football</b> は述語を探し、<code>playing</code> を <code>0.651</code> 参照します（目的語 → 述語）。
-          自分自身も <code>0.242</code> 残るので、<code>z_football</code> は
-          「<code>playing</code> 寄りに引かれた <code>football</code>」になります。</li>
-      </ul>
-      <p>
-        <strong>因果マスクを入れて <code>playing</code> をもう一度見てください。</strong>
-        <code>football</code> が見えなくなるので配分が <code>[0.461, 0.079, 0.461, 0]</code> に変わり、
-        <code>z_playing</code> も別のベクトルになります。
-        語は同じでも、参照できる文脈が変われば <code>z</code> は変わる — これが最も直接的な確認方法です。
-      </p>
-      <p class="reading-note">
+      <p class="note">
         4行とも文法的に自然な参照先になっていますが、これは <code>W^Q</code>, <code>W^K</code> を
         そうなるように手で書いたからです。本物のモデルはこの配線をデータから学習します。
         また、ここでは1つの head が4つの関係すべてを担っています。
@@ -380,15 +442,51 @@
     </section>
 
     <!-- ================================================================
-         5. 前後にあるもの
+         07. つまずきやすい点
          ================================================================ -->
-    <section class="card section-context">
-      <h2>この計算の前後に起きること</h2>
-      <p>self-attention は Transformer の一部です。前後に何があるかを押さえると、位置づけがはっきりします。</p>
+    <section class="card" id="s07">
+      <h2><span class="section-badge">07</span>つまずきやすい点</h2>
+      <p>ここまでで一通り追えました。誤解しやすいところを、上の節に対応づけて並べます。</p>
+      <dl class="pitfall-list">
+        <dt>重みが掛かるのは埋め込みではなく value（→ 02, 04）</dt>
+        <dd><code>z_i = Σ_j a_ij v_j</code> であって <code>Σ_j a_ij x_j</code> ではありません。
+          もし <code>W^V</code> が単位行列なら両者は一致しますが、そうしないからこそ
+          「見る基準」と「渡す中身」を独立に学習できます。</dd>
 
-      <div class="context-grid">
-        <article class="context-item">
-          <h3>前: positional encoding</h3>
+        <dt>行列は対称ではない（→ 06）</dt>
+        <dd><code>a_ij ≠ a_ji</code> です。<code>W^Q ≠ W^K</code> だからで、
+          もし <code>W^Q = W^K</code> にすると内積が対称になり、
+          各語が自分自身を最も強く見る自明な結果に寄りがちです。</dd>
+
+        <dt>softmax は行方向にだけ取る（→ 03, 06）</dt>
+        <dd>和が 1 になるのは<strong>行</strong>です。列の和には意味がありません。
+          「配分」という言葉が指しているのは、常に1つの語の側の配分です。</dd>
+
+        <dt><code>√d_k</code> は温度ではなく分散の補正（→ STEP 2）</dt>
+        <dd>次元が大きいほど内積の分散が <code>d_k</code> に比例して大きくなるのを打ち消すためのものです。
+          「softmax を鈍らせたいから割る」のではありません。</dd>
+
+        <dt>「文脈を反映」は置き換えではない（→ 08）</dt>
+        <dd>残差接続 <code>x + zW^O</code> があるので、元の語の情報は残ります。
+          層を重ねるたびに、少しずつ文脈が足されていく形です。</dd>
+      </dl>
+    </section>
+
+    <!-- ================================================================
+         08. 前後にあるもの
+         「前 → ここ → 同時 → 後」の時間順に縦に積む。並列カードにしない。
+         ================================================================ -->
+    <section class="card" id="s08">
+      <h2><span class="section-badge">08</span>この計算の前後にあるもの</h2>
+      <p>
+        05 で見たのは Transformer の<strong>一部分</strong>です。最後に、前後に何があるかを
+        処理の順番どおりに並べて、位置づけをはっきりさせます。
+      </p>
+
+      <ol class="flow-list">
+        <li class="flow-item">
+          <p class="flow-when">前</p>
+          <h3>positional encoding</h3>
           <p>
             attention は<strong>語順を見ません</strong>。入力の行を並べ替えると出力の行も同じように
             並べ替わるだけで（置換同変）、各語の <code>z</code> は変わりません。
@@ -398,32 +496,28 @@
           <div class="formula-block small">
             <code>x_t = e(token_t) + p(t)</code>
           </div>
-          <p class="context-caveat">
+          <p class="caveat-inline">
             <b>このページでは <code>p(t)</code> を足していません。</b>
-            4語は埋め込みが互いに違うので、足さなくても区別はつきます。
+            4語は埋め込みが互いに違うので、足さなくても語の区別はつきます。
             足していない影響は、<code>football playing like I</code> と並べ替えても
             各語の <code>z</code> がまったく同じになることです。
-            語順を扱うには位置符号が要る、というのはこの意味です。
           </p>
-        </article>
+        </li>
 
-        <article class="context-item">
-          <h3>後: 出力射影と残差接続</h3>
+        <li class="flow-item is-here">
+          <p class="flow-when">ここ</p>
+          <h3>self-attention（このページ）</h3>
           <p>
-            <code>z_i</code> はそのまま次の層へ行くわけではありません。<code>W^O</code> で
-            <code>d_model</code> 次元に戻し、<strong>元のベクトルに足します</strong>。
-            つまり文脈の反映は<strong>上書きではなく更新</strong>です。
-            <code>x_i</code> が持っていた情報は失われません。
+            <code>Q</code>, <code>K</code>, <code>V</code> を作り、<code>q·k</code> で配分を決め、
+            その配分で <code>v</code> を混ぜて <code>z</code> を得る。01〜06 で追ったのはここです。
           </p>
-          <div class="formula-block small">
-            <code>x_i ← LayerNorm(x_i + z_i W^O)</code>
-          </div>
-        </article>
+        </li>
 
-        <article class="context-item">
-          <h3>並列: multi-head attention</h3>
+        <li class="flow-item">
+          <p class="flow-when">同時に</p>
+          <h3>multi-head attention</h3>
           <p>
-            同じ計算を <code>h</code> 組の <code>(W^Q, W^K, W^V)</code> で<strong>並列に</strong>行い、
+            まったく同じ計算を <code>h</code> 組の <code>(W^Q, W^K, W^V)</code> で<strong>並列に</strong>行い、
             結果を連結して <code>W^O</code> に通します。
             head ごとに違う関係（主語→動詞、動詞→目的語、固有名詞の照応…）を拾わせるためです。
             このページは <code>h = 1</code> なので、1つの head が全部を背負っています。
@@ -432,69 +526,53 @@
             <code>MultiHead(X) = [head₁ ; … ; head_h] W^O</code>
             <code>head_m = softmax(Q_m K_mᵀ ⁄ √d_k) V_m</code>
           </div>
-        </article>
+        </li>
 
-        <article class="context-item">
-          <h3>並列: 因果マスク</h3>
+        <li class="flow-item">
+          <p class="flow-when">同時に</p>
+          <h3>因果マスク（decoder かどうか）</h3>
           <p>
             GPT のような decoder は「次の語を当てる」ように訓練するため、
             <code>j &gt; i</code> のスコアを <code>−∞</code> にして<strong>未来を見せません</strong>。
-            上のトグルを入れると行列の右上が消え、各行の配分が計算し直されるのが確認できます。
+            06 のトグルで確かめたのがこれです。
             BERT のような encoder はマスクを掛けず、文全体を双方向に見ます。
           </p>
-        </article>
+        </li>
 
-        <article class="context-item">
-          <h3>後: feed-forward network</h3>
+        <li class="flow-item">
+          <p class="flow-when">直後</p>
+          <h3>出力射影 <code>W^O</code> と残差接続</h3>
+          <p>
+            <code>z_i</code> はそのまま次の層へ行くわけではありません。<code>W^O</code> で
+            <code>d_model</code> 次元に戻し、<strong>元のベクトルに足します</strong>。
+            つまり文脈の反映は<strong>上書きではなく更新</strong>で、<code>x_i</code> が持っていた情報は失われません。
+          </p>
+          <div class="formula-block small">
+            <code>x_i ← LayerNorm(x_i + z_i W^O)</code>
+          </div>
+        </li>
+
+        <li class="flow-item">
+          <p class="flow-when">そのあと</p>
+          <h3>feed-forward network</h3>
           <p>
             attention のあとには位置ごとに独立な2層 MLP が入ります。
             attention が<strong>語の間で情報を混ぜる</strong>層、FFN が
             <strong>混ぜた情報を1語の中で加工する</strong>層、という分担です。
             この2つの繰り返しが Transformer ブロックです。
           </p>
-        </article>
+        </li>
 
-        <article class="context-item">
-          <h3>関連: cross-attention</h3>
+        <li class="flow-item">
+          <p class="flow-when">別の使い方</p>
+          <h3>cross-attention</h3>
           <p>
             <code>Q</code> と <code>K, V</code> を<strong>別の系列から作る</strong>と cross-attention になります。
             翻訳なら <code>Q</code> が出力側、<code>K, V</code> が入力側です。
-            計算式は self-attention と完全に同じで、材料の出どころだけが違います。
+            計算式は 05 で追ったものと完全に同じで、材料の出どころだけが違います。
           </p>
-        </article>
-      </div>
-    </section>
-
-    <!-- ================================================================
-         6. つまずきやすい点
-         ================================================================ -->
-    <section class="card section-pitfalls">
-      <h2>つまずきやすい点</h2>
-      <dl class="pitfall-list">
-        <dt>重みが掛かるのは埋め込みではなく value</dt>
-        <dd><code>z_i = Σ_j a_ij v_j</code> であって <code>Σ_j a_ij x_j</code> ではありません。
-          もし <code>W^V</code> が単位行列なら両者は一致しますが、そうしないからこそ
-          「見る基準」と「渡す中身」を独立に学習できます。</dd>
-
-        <dt>行列は対称ではない</dt>
-        <dd><code>a_ij ≠ a_ji</code> です。<code>W^Q ≠ W^K</code> だからで、
-          「A が B を見る強さ」と「B が A を見る強さ」は別物です。
-          もし <code>W^Q = W^K</code> にすると内積が対称になり、
-          各語が自分自身を最も強く見る自明な結果に寄りがちです。</dd>
-
-        <dt>softmax は行方向にだけ取る</dt>
-        <dd>和が 1 になるのは<strong>行</strong>です。列の和には意味がありません。
-          「配分」という言葉が指しているのは常に1つの語の側の配分です。</dd>
-
-        <dt>√d_k は温度ではなく分散の補正</dt>
-        <dd><code>q</code> と <code>k</code> の各成分が独立で分散 1 なら、内積の分散は <code>d_k</code> になります。
-          <code>√d_k</code> で割ると分散が 1 に戻ります。上のトグルを外すと、
-          割らない場合に softmax が鋭くなる（1つの語に偏る）ことが確認できます。</dd>
-
-        <dt>「文脈を反映」は置き換えではない</dt>
-        <dd>残差接続 <code>x + zW^O</code> があるので、元の語の情報は残ります。
-          層を重ねるたびに、少しずつ文脈が足されていく形です。</dd>
-      </dl>
+        </li>
+      </ol>
     </section>
 
     <nav class="back-nav" aria-label="ナビゲーション">

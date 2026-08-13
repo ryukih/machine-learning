@@ -8,6 +8,24 @@
  *   最初から最後まで実際に数値計算し、その途中経過をすべて画面に出す。
  *   数式の各記号が、どの数字に対応しているかを目で追えるようにするのが狙いである。
  *
+ * 【描画の順序 — index.html の一本道に合わせる】
+ *   ページは 01 → 08 の一方向に進む構成であり、このファイルもその順に描く。
+ *
+ *       04  renderParameterTables   使う行列（X, W^Q, W^K, W^V）を先に開示する
+ *       05  renderQueryStep         STEP1 : q を1本作る
+ *           renderScoreStep         STEP2 : 4つの k との内積、√d_k で割る
+ *           renderSoftmaxStep       STEP3 : softmax の中身（exp と正規化）を分解して見せる
+ *           renderValueMixing       STEP4 : 配分で v を混ぜ、最後に z として足し合わせる
+ *           renderVectorComparison  RESULT: x と z を並べる
+ *       06  renderAttentionMatrix   05 を4語ぶん繰り返した結果として行列を出す
+ *           renderReadingList       4行それぞれの読み方（数値から生成する）
+ *
+ *   STEP2 と STEP3 を別の表に分けているのは、「内積を取る」ことと
+ *   「それを足して1になる比率に直す」ことが別の操作だからである。
+ *   1つの表に詰めると、softmax が単なる列の変換に見えてしまう。
+ *
+ *   4×4 の行列を 06 に置くのも同じ理由で、行列は 05 の結果であって前提ではない。
+ *
  * 【実装している数値モデル】
  *   Vaswani et al. (2017) "Attention Is All You Need" の式(1)、
  *   scaled dot-product attention をそのまま実装している。
@@ -59,6 +77,9 @@
  *   参照する要素の id は ELEMENT_IDS に集約している。HTML 側で id を変えるときは
  *   ここも合わせて直すこと。描画は DOM（表と div）で行い、Canvas は使わない。
  *   行列と数表が主役であり、数値をテキストとして読ませたいためである。
+ *
+ *   本文に出る数値はこのファイルが生成する。解説文へ数字を直接書くと、
+ *   トグル（√d_k・因果マスク）を切り替えたときに本文だけが古い値のまま残るためである。
  * =============================================================================
  */
 
@@ -139,11 +160,27 @@ const VALUE_WEIGHTS = [
   [0.6, 0.0, 0.2, 1.0], // football
 ];
 
+/**
+ * 各語の query が「何を探しているか」を日本語で言い直したもの。
+ * QUERY_WEIGHTS をそう書いたことの説明であって、計算には一切使わない。
+ * 実際にどの語を最も強く参照したかは毎回 attention 重みから求めるので、
+ * 因果マスクを掛けて参照先が変わっても、この文と食い違うことはない。
+ */
+const QUERY_INTENTS = {
+  I:        '述語（主語 → 述語）',
+  like:     '目的語（動詞 → 目的語）',
+  playing:  '目的語（動詞 → 目的語）',
+  football: '述語（目的語 → 述語）',
+};
+
 /** 各トークンに割り当てる表示色。CSS の :root と手動で同期させている。 */
 const TOKEN_COLORS = ['#2563eb', '#0891b2', '#7c3aed', '#ea580c'];
 
 /** マスクされたスコアに入れる値。softmax の指数が 0 になり、その語は完全に無視される。 */
 const MASKED_SCORE = Number.NEGATIVE_INFINITY;
+
+/** 文中で「無視できる」と見なす重みのしきい値。読み方の文から 0 の項を落とすのに使う。 */
+const NEGLIGIBLE_WEIGHT = 0.0005;
 
 /** 表示上の丸め桁数。計算には一切使わず、文字列化のときだけ使う。 */
 const DISPLAY_DIGITS = {
@@ -154,19 +191,23 @@ const DISPLAY_DIGITS = {
 
 /** index.html から参照する要素の id。 */
 const ELEMENT_IDS = {
+  parameterTables: 'parameterTables',
+  walkthrough: 'walkthrough',
   tokenButtons: 'tokenButtons',
-  scaleToggle: 'scaleToggle',
-  maskToggle: 'maskToggle',
-  attentionMatrix: 'attentionMatrix',
-  matrixCaption: 'matrixCaption',
   focusHeadline: 'focusHeadline',
   queryStep: 'queryStep',
+  scaleToggle: 'scaleToggle',
   scoreTableBody: 'scoreTableBody',
-  scoreTableHead: 'scoreTableHead',
+  scaledScoreHead: 'scaledScoreHead',
+  softmaxTableBody: 'softmaxTableBody',
+  softmaxTableFoot: 'softmaxTableFoot',
   valueMixing: 'valueMixing',
   vectorCompare: 'vectorCompare',
   resultReading: 'resultReading',
-  parameterTables: 'parameterTables',
+  maskToggle: 'maskToggle',
+  attentionMatrix: 'attentionMatrix',
+  matrixCaption: 'matrixCaption',
+  readingList: 'readingList',
 };
 
 /* ===========================================================================
@@ -190,7 +231,7 @@ function multiplyRowVectorByMatrix(rowVector, weightMatrix) {
   return projected;
 }
 
-/** 要素ごとの和。token embedding と positional encoding を足すのに使う。 */
+/** 要素ごとの和。value を配分どおりに足し込むのに使う。 */
 function addVectors(firstVector, secondVector) {
   return firstVector.map((value, index) => value + secondVector[index]);
 }
@@ -201,15 +242,22 @@ function scaleVector(vector, factor) {
 }
 
 /**
- * softmax。最大値を引いてから指数を取るのは、指数のオーバーフローを避けるため。
+ * softmax の途中経過をすべて返す版。STEP3 で exp と正規化を分けて見せるため、
+ * 最終結果だけでなく max と exp の配列も返す。
+ * 最大値を引いてから指数を取るのは、指数のオーバーフローを避けるためであり、
  * 引き算しても結果は変わらない（分子分母に同じ定数が掛かるだけ）。
  * マスクされた要素は -∞ なので exp が 0 になり、配分から完全に外れる。
  */
-function softmax(scores) {
+function softmaxWithDetail(scores) {
   const maximumScore = Math.max(...scores);
   const exponentials = scores.map((score) => Math.exp(score - maximumScore));
   const total = exponentials.reduce((sum, value) => sum + value, 0);
-  return exponentials.map((value) => value / total);
+  return {
+    maximumScore,
+    exponentials,
+    total,
+    weights: exponentials.map((value) => value / total),
+  };
 }
 
 /* ===========================================================================
@@ -219,7 +267,7 @@ function softmax(scores) {
 /**
  * 入力行列 X を作る。各行は語そのものを表す one-hot ベクトルである。
  * 本物のモデルはここへさらに positional encoding を足すが、このページでは足していない。
- * 足さない影響は「語順の情報が入らない」ことで、その意味は解説側で述べている。
+ * 足さない影響は「語順の情報が入らない」ことで、その意味は解説側（08）で述べている。
  */
 function buildInputVectors() {
   return SENTENCE_TOKENS.map((token) => TOKEN_EMBEDDINGS[token].slice());
@@ -260,13 +308,14 @@ function computeAttentionPass(inputVectors, options) {
   const scaledScores = rawScores.map((row) => row.map((score) => score / scaleDivisor));
   const maskedScores = options.useCausalMask ? applyCausalMask(scaledScores) : scaledScores;
 
-  const attentionWeights = maskedScores.map(softmax);
+  const softmaxDetails = maskedScores.map(softmaxWithDetail);
+  const attentionWeights = softmaxDetails.map((detail) => detail.weights);
   const contextVectors = attentionWeights.map((row) => mixValues(row, valueVectors));
 
   return {
     inputVectors, queryVectors, keyVectors, valueVectors,
     rawScores, scaleDivisor, scaledScores, maskedScores,
-    attentionWeights, contextVectors,
+    softmaxDetails, attentionWeights, contextVectors,
   };
 }
 
@@ -293,6 +342,21 @@ function createElement(tagName, className, textContent) {
   return element;
 }
 
+/** 表の1行を、セルの中身の配列から作る。第1列だけは行見出し（th）にする。 */
+function createTableRow(rowHeadText, cellTexts, options) {
+  const settings = options || {};
+  const row = createElement('tr', settings.rowClassName);
+  const head = createElement('th', settings.headClassName, rowHeadText);
+  head.scope = 'row';
+  if (settings.tokenColor) head.style.setProperty('--token-color', settings.tokenColor);
+  row.appendChild(head);
+  cellTexts.forEach((text, columnIndex) => {
+    const isLast = columnIndex === cellTexts.length - 1;
+    row.appendChild(createElement('td', isLast ? settings.lastCellClassName : undefined, text));
+  });
+  return row;
+}
+
 /** 軸ラベル付きでベクトルを表示する小さなチップ列。数字だけでなく軸の意味も一緒に読ませる。 */
 function createVectorChips(vector, axisLabels, highlightMaxValue) {
   const container = createElement('div', 'vector-chips');
@@ -307,6 +371,16 @@ function createVectorChips(vector, axisLabels, highlightMaxValue) {
   return container;
 }
 
+/** 配列の最大値の位置。どの語が最も強く参照されたかを強調するために使う。 */
+function argumentMaximum(values) {
+  return values.reduce((bestIndex, value, index) => (value > values[bestIndex] ? index : bestIndex), 0);
+}
+
+/** そのマスがマスクされているか。表示の分岐に何度も使うので関数にしておく。 */
+function isMaskedCell(pass, queryIndex, keyIndex) {
+  return !Number.isFinite(pass.maskedScores[queryIndex][keyIndex]);
+}
+
 /* ===========================================================================
  * 5. 画面の状態
  * ========================================================================= */
@@ -319,212 +393,28 @@ const state = {
 };
 
 /* ===========================================================================
- * 6. 描画
+ * 6. 描画 — 04: 使用する行列
  * ========================================================================= */
 
-/** 注目する語を選ぶボタン列。 */
-function renderTokenButtons() {
-  ui.tokenButtons.innerHTML = '';
-  SENTENCE_TOKENS.forEach((token, index) => {
-    const button = createElement('button', 'token-button', token);
-    button.type = 'button';
-    button.style.setProperty('--token-color', TOKEN_COLORS[index]);
-    button.setAttribute('aria-pressed', String(index === state.focusTokenIndex));
-    if (index === state.focusTokenIndex) button.classList.add('is-active');
-    button.addEventListener('click', () => {
-      state.focusTokenIndex = index;
-      renderAll();
-    });
-    ui.tokenButtons.appendChild(button);
-  });
-}
-
-/** 行列の1セル。attention 重みの大きさを背景の濃さで示す。 */
-function createMatrixCell(weight, isMasked, isFocusedRow) {
-  const cell = createElement('div', 'matrix-cell');
-  if (isMasked) {
-    cell.classList.add('is-masked');
-    cell.textContent = '—';
-    return cell;
-  }
-  if (isFocusedRow) cell.classList.add('in-focus-row');
-  cell.style.setProperty('--fill', String(weight));
-  cell.textContent = formatNumber(weight, DISPLAY_DIGITS.weight);
-  return cell;
-}
-
-/** 4×4 の attention 行列。行が query 側の語、列が key 側の語。 */
-function renderAttentionMatrix(pass) {
-  ui.attentionMatrix.innerHTML = '';
-  ui.attentionMatrix.style.setProperty('--token-count', String(SENTENCE_TOKENS.length));
-  ui.attentionMatrix.appendChild(createElement('div', 'matrix-corner', 'query \\ key'));
-  SENTENCE_TOKENS.forEach((token, index) => {
-    const header = createElement('div', 'matrix-head', token);
-    header.style.setProperty('--token-color', TOKEN_COLORS[index]);
-    ui.attentionMatrix.appendChild(header);
-  });
-
-  pass.attentionWeights.forEach((row, queryIndex) => {
-    ui.attentionMatrix.appendChild(createMatrixRowHeader(queryIndex));
-    row.forEach((weight, keyIndex) => {
-      const isMasked = !Number.isFinite(pass.maskedScores[queryIndex][keyIndex]);
-      ui.attentionMatrix.appendChild(createMatrixCell(weight, isMasked, queryIndex === state.focusTokenIndex));
-    });
-  });
-}
-
-/** 行見出し。クリックでその語に注目を移せるようボタンにしている。 */
-function createMatrixRowHeader(queryIndex) {
-  const header = createElement('button', 'matrix-row-head', SENTENCE_TOKENS[queryIndex]);
-  header.type = 'button';
-  header.style.setProperty('--token-color', TOKEN_COLORS[queryIndex]);
-  if (queryIndex === state.focusTokenIndex) header.classList.add('is-active');
-  header.addEventListener('click', () => {
-    state.focusTokenIndex = queryIndex;
-    renderAll();
-  });
-  return header;
-}
-
-/** 行列の下に置く説明文。トグルの状態で読み方が変わるので、そのつど作り直す。 */
-function renderMatrixCaption(pass) {
-  const divisorText = state.useScaling
-    ? `√d_k = √${MODEL_DIMENSIONS.key} ≈ ${formatNumber(pass.scaleDivisor, DISPLAY_DIGITS.vector)} で割っています`
-    : '√d_k で割っていません（内積をそのまま softmax に入れています）';
-  const maskText = state.useCausalMask
-    ? '因果マスクが有効なので、各語は自分より後ろを見られません（decoder / GPT 型）。'
-    : 'マスクなしなので、各語は文全体を双方向に見ています（encoder / BERT 型）。';
-  ui.matrixCaption.textContent =
-    `各行の和は 1 です。行 i は「i 番目の語が文脈ベクトルを作るときの配分」を表します。${divisorText}。${maskText}`;
-}
-
-/** STEP1: 注目している語の query を表示する。 */
-function renderQueryStep(pass) {
-  const token = SENTENCE_TOKENS[state.focusTokenIndex];
-  const index = state.focusTokenIndex;
-  ui.queryStep.innerHTML = '';
-  ui.queryStep.appendChild(createElement('p', 'step-formula',
-    `x_${token} = ${formatVector(pass.inputVectors[index], DISPLAY_DIGITS.vector)}` +
-    `   （軸: ${EMBEDDING_AXIS_LABELS.join(' / ')}） ← ${index + 1}番目の軸だけが 1`));
-  ui.queryStep.appendChild(createElement('p', 'step-formula',
-    `q_${token} = x_${token} W^Q = ${formatVector(pass.queryVectors[index], DISPLAY_DIGITS.vector)}` +
-    `   ← W^Q の ${token} 行そのもの`));
-  ui.queryStep.appendChild(createVectorChips(pass.queryVectors[index], SCORE_SPACE_AXIS_LABELS, false));
-}
-
-/** STEP2/3 の表。1行が「相手の語 j」に対応し、内積から配分までを横に並べる。 */
-function renderScoreTable(pass) {
-  const index = state.focusTokenIndex;
-  ui.scoreTableBody.innerHTML = '';
-  pass.attentionWeights[index].forEach((weight, keyIndex) => {
-    const row = createElement('tr');
-    if (keyIndex === argumentMaximum(pass.attentionWeights[index])) row.classList.add('is-top');
-    appendScoreCells(row, pass, index, keyIndex, weight);
-    ui.scoreTableBody.appendChild(row);
-  });
-  ui.scoreTableHead.textContent = state.useScaling
-    ? `q·k ÷ √d_k`
-    : `q·k（割らない）`;
-}
-
-/** 表の1行ぶんのセルを詰める。 */
-function appendScoreCells(row, pass, queryIndex, keyIndex, weight) {
-  const isMasked = !Number.isFinite(pass.maskedScores[queryIndex][keyIndex]);
-  const tokenCell = createElement('th', 'score-token', SENTENCE_TOKENS[keyIndex]);
-  tokenCell.scope = 'row';
-  tokenCell.style.setProperty('--token-color', TOKEN_COLORS[keyIndex]);
-  row.appendChild(tokenCell);
-  row.appendChild(createElement('td', '', formatVector(pass.keyVectors[keyIndex], DISPLAY_DIGITS.vector)));
-  row.appendChild(createElement('td', '', formatNumber(pass.rawScores[queryIndex][keyIndex], DISPLAY_DIGITS.score)));
-  row.appendChild(createElement('td', '', isMasked
-    ? '−∞'
-    : formatNumber(pass.scaledScores[queryIndex][keyIndex], DISPLAY_DIGITS.score)));
-  row.appendChild(createElement('td', 'score-weight', formatNumber(weight, DISPLAY_DIGITS.weight)));
-}
-
-/** 配列の最大値の位置。どの語が最も強く参照されたかを強調するために使う。 */
-function argumentMaximum(values) {
-  return values.reduce((bestIndex, value, index) => (value > values[bestIndex] ? index : bestIndex), 0);
-}
-
-/** STEP4: value をどう混ぜたか。棒の長さが a_ij、右の数字が実際に足された a_ij·v_j。 */
-function renderValueMixing(pass) {
-  const index = state.focusTokenIndex;
-  ui.valueMixing.innerHTML = '';
-  pass.attentionWeights[index].forEach((weight, keyIndex) => {
-    const contribution = scaleVector(pass.valueVectors[keyIndex], weight);
-    const row = createElement('div', 'mix-row');
-    row.style.setProperty('--token-color', TOKEN_COLORS[keyIndex]);
-    row.appendChild(createElement('span', 'mix-token', SENTENCE_TOKENS[keyIndex]));
-    row.appendChild(createMixBar(weight));
-    row.appendChild(createElement('code', 'mix-vector',
-      `${formatNumber(weight, DISPLAY_DIGITS.weight)} × ${formatVector(pass.valueVectors[keyIndex], DISPLAY_DIGITS.vector)}` +
-      ` = ${formatVector(contribution, DISPLAY_DIGITS.vector)}`));
-    ui.valueMixing.appendChild(row);
-  });
-}
-
-/** attention 重みを長さで示す棒。 */
-function createMixBar(weight) {
-  const track = createElement('span', 'mix-bar');
-  const fill = createElement('span', 'mix-bar-fill');
-  fill.style.width = `${weight * 100}%`;
-  track.appendChild(fill);
-  return track;
-}
-
-/** 結果: 入力ベクトル x_i と文脈ベクトル z_i を並べ、何が変わったかを見せる。 */
-function renderVectorComparison(pass) {
-  const index = state.focusTokenIndex;
-  ui.vectorCompare.innerHTML = '';
-  ui.vectorCompare.appendChild(createComparisonBlock(
-    `入力 x_${SENTENCE_TOKENS[index]}（この語だけの情報）`,
-    pass.inputVectors[index], EMBEDDING_AXIS_LABELS));
-  ui.vectorCompare.appendChild(createElement('div', 'compare-arrow', '↓  self-attention'));
-  ui.vectorCompare.appendChild(createComparisonBlock(
-    `文脈 z_${SENTENCE_TOKENS[index]}（周りを取り込んだ情報）`,
-    pass.contextVectors[index], VALUE_AXIS_LABELS));
-}
-
-/** 比較ブロック1つぶん。軸の意味が違うので、ラベルも一緒に渡す。 */
-function createComparisonBlock(title, vector, axisLabels) {
-  const block = createElement('div', 'compare-block');
-  block.appendChild(createElement('p', 'compare-title', title));
-  block.appendChild(createVectorChips(vector, axisLabels, true));
-  return block;
-}
-
-/** 結果の読み方を1文で述べる。何をどれだけ参照し、その結果 z が何の混合になったかを言う。 */
-function renderResultReading(pass) {
-  const index = state.focusTokenIndex;
-  const focusToken = SENTENCE_TOKENS[index];
-  const topIndex = argumentMaximum(pass.attentionWeights[index]);
-  const topWeight = pass.attentionWeights[index][topIndex];
-  const topPercent = Math.round(topWeight * 100);
-  ui.resultReading.textContent =
-    `x_${focusToken} は "${focusToken}" の軸だけが 1 の、周りを何も知らないベクトルでした。` +
-    `attention を通すと "${SENTENCE_TOKENS[topIndex]}" を最も強く（${topPercent}%）参照し、` +
-    `z_${focusToken} は4本の value をその配分で混ぜたベクトルになります。` +
-    `因果マスクを入れて見比べてください。参照できる語が変われば z も変わります。`;
-}
-
-/** 使っているパラメータをすべて表にして最後に置く。値を隠さないことが教材の前提である。 */
+/**
+ * 04 に置く行列表。X が one-hot なので Q, K, V は W^Q, W^K, W^V と数値が一致する。
+ * 同じ数字の表を7枚並べても読者の負荷が増えるだけなので、ここでは元になる4枚だけを出し、
+ * 一致することは本文の1文で述べている。
+ */
 function renderParameterTables(pass) {
   ui.parameterTables.innerHTML = '';
   ui.parameterTables.appendChild(createMatrixTable(
-    'X : 入力（one-hot 埋め込み）', SENTENCE_TOKENS, EMBEDDING_AXIS_LABELS, pass.inputVectors));
+    'X : 入力（one-hot 埋め込み）— 行が語、列が埋め込みの軸',
+    SENTENCE_TOKENS, EMBEDDING_AXIS_LABELS, pass.inputVectors));
   ui.parameterTables.appendChild(createMatrixTable(
-    'W^Q : 語ごとの query 一覧', EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, QUERY_WEIGHTS));
+    'W^Q : 語ごとの query 一覧（d_k = 2）',
+    EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, QUERY_WEIGHTS));
   ui.parameterTables.appendChild(createMatrixTable(
-    'W^K : 語ごとの key 一覧', EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, KEY_WEIGHTS));
+    'W^K : 語ごとの key 一覧（q と内積を取るので同じ d_k = 2）',
+    EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, KEY_WEIGHTS));
   ui.parameterTables.appendChild(createMatrixTable(
-    'W^V : 語ごとの value 一覧', EMBEDDING_AXIS_LABELS, VALUE_AXIS_LABELS, VALUE_WEIGHTS));
-  ui.parameterTables.appendChild(createMatrixTable(
-    'Q = X W^Q（X が one-hot なので W^Q と一致）', SENTENCE_TOKENS, SCORE_SPACE_AXIS_LABELS, pass.queryVectors));
-  ui.parameterTables.appendChild(createMatrixTable(
-    'K = X W^K（同上）', SENTENCE_TOKENS, SCORE_SPACE_AXIS_LABELS, pass.keyVectors));
-  ui.parameterTables.appendChild(createMatrixTable(
-    'V = X W^V（同上。x とは別のベクトルであることに注意）', SENTENCE_TOKENS, VALUE_AXIS_LABELS, pass.valueVectors));
+    'W^V : 語ごとの value 一覧（d_v = 4。各行が one-hot でないことに注目）',
+    EMBEDDING_AXIS_LABELS, VALUE_AXIS_LABELS, VALUE_WEIGHTS));
 }
 
 /** 行ラベル・列ラベル付きの行列表を1つ作る。 */
@@ -535,12 +425,8 @@ function createMatrixTable(caption, rowLabels, columnLabels, rows) {
   table.appendChild(createTableHeadRow(columnLabels));
   const body = createElement('tbody');
   rows.forEach((row, rowIndex) => {
-    const tableRow = createElement('tr');
-    const rowHead = createElement('th', '', rowLabels[rowIndex]);
-    rowHead.scope = 'row';
-    tableRow.appendChild(rowHead);
-    row.forEach((value) => tableRow.appendChild(createElement('td', '', formatNumber(value, DISPLAY_DIGITS.vector))));
-    body.appendChild(tableRow);
+    const cells = row.map((value) => formatNumber(value, DISPLAY_DIGITS.vector));
+    body.appendChild(createTableRow(rowLabels[rowIndex], cells));
   });
   table.appendChild(body);
   figure.appendChild(table);
@@ -561,26 +447,279 @@ function createTableHeadRow(columnLabels) {
   return head;
 }
 
+/* ===========================================================================
+ * 7. 描画 — 05: 1語を最後まで追う
+ * ========================================================================= */
+
+/** 注目する語を選ぶボタン列。sticky バーの中にあり、STEP を読みながら切り替えられる。 */
+function renderTokenButtons() {
+  ui.tokenButtons.innerHTML = '';
+  SENTENCE_TOKENS.forEach((token, index) => {
+    const button = createElement('button', 'token-button', token);
+    button.type = 'button';
+    button.style.setProperty('--token-color', TOKEN_COLORS[index]);
+    button.setAttribute('aria-pressed', String(index === state.focusTokenIndex));
+    if (index === state.focusTokenIndex) button.classList.add('is-active');
+    button.addEventListener('click', () => {
+      state.focusTokenIndex = index;
+      renderAll();
+    });
+    ui.tokenButtons.appendChild(button);
+  });
+}
+
+/** STEP1: 注目している語の query を1本作る。 */
+function renderQueryStep(pass) {
+  const token = SENTENCE_TOKENS[state.focusTokenIndex];
+  const index = state.focusTokenIndex;
+  ui.queryStep.innerHTML = '';
+  ui.queryStep.appendChild(createElement('p', 'step-formula',
+    `x_${token} = ${formatVector(pass.inputVectors[index], DISPLAY_DIGITS.vector)}` +
+    `   （軸: ${EMBEDDING_AXIS_LABELS.join(' / ')}） ← ${index + 1}番目の軸だけが 1`));
+  ui.queryStep.appendChild(createElement('p', 'step-formula',
+    `q_${token} = x_${token} W^Q = ${formatVector(pass.queryVectors[index], DISPLAY_DIGITS.vector)}` +
+    `   ← W^Q の ${token} 行そのもの`));
+  ui.queryStep.appendChild(createVectorChips(pass.queryVectors[index], SCORE_SPACE_AXIS_LABELS, false));
+}
+
+/** STEP2 の表。1行が「相手の語 j」に対応し、k_j と内積、スケーリング後までを並べる。 */
+function renderScoreStep(pass) {
+  const queryIndex = state.focusTokenIndex;
+  ui.scoreTableBody.innerHTML = '';
+  SENTENCE_TOKENS.forEach((token, keyIndex) => {
+    const masked = isMaskedCell(pass, queryIndex, keyIndex);
+    ui.scoreTableBody.appendChild(createTableRow(token, [
+      formatVector(pass.keyVectors[keyIndex], DISPLAY_DIGITS.vector),
+      formatNumber(pass.rawScores[queryIndex][keyIndex], DISPLAY_DIGITS.score),
+      masked ? '−∞（マスク）' : formatNumber(pass.scaledScores[queryIndex][keyIndex], DISPLAY_DIGITS.score),
+    ], { headClassName: 'score-token', tokenColor: TOKEN_COLORS[keyIndex] }));
+  });
+  ui.scaledScoreHead.textContent = state.useScaling
+    ? 's_ij = q·k ⁄ √d_k'
+    : 's_ij = q·k（割らない）';
+}
+
+/** STEP3 の表。softmax を「exp を取る」「和で割る」の2列に開いて見せる。 */
+function renderSoftmaxStep(pass) {
+  const queryIndex = state.focusTokenIndex;
+  const detail = pass.softmaxDetails[queryIndex];
+  const topIndex = argumentMaximum(pass.attentionWeights[queryIndex]);
+
+  ui.softmaxTableBody.innerHTML = '';
+  SENTENCE_TOKENS.forEach((token, keyIndex) => {
+    const masked = isMaskedCell(pass, queryIndex, keyIndex);
+    ui.softmaxTableBody.appendChild(createTableRow(token, [
+      masked ? '−∞' : formatNumber(pass.maskedScores[queryIndex][keyIndex], DISPLAY_DIGITS.score),
+      formatNumber(detail.exponentials[keyIndex], DISPLAY_DIGITS.score),
+      formatNumber(pass.attentionWeights[queryIndex][keyIndex], DISPLAY_DIGITS.weight),
+    ], {
+      rowClassName: keyIndex === topIndex ? 'is-top' : undefined,
+      headClassName: 'score-token',
+      tokenColor: TOKEN_COLORS[keyIndex],
+      lastCellClassName: 'score-weight',
+    }));
+  });
+
+  // 合計行。exp の和が「割る数」そのものであり、割った結果の和が 1 になることを同じ行で見せる。
+  ui.softmaxTableFoot.innerHTML = '';
+  ui.softmaxTableFoot.appendChild(createTableRow('合計', [
+    `max = ${formatNumber(detail.maximumScore, DISPLAY_DIGITS.score)}`,
+    formatNumber(detail.total, DISPLAY_DIGITS.score),
+    formatNumber(detail.weights.reduce((sum, weight) => sum + weight, 0), DISPLAY_DIGITS.weight),
+  ]));
+}
+
+/** STEP4: value をどう混ぜたか。棒の長さが a_ij、右の数字が実際に足された a_ij·v_j。 */
+function renderValueMixing(pass) {
+  const index = state.focusTokenIndex;
+  const token = SENTENCE_TOKENS[index];
+  ui.valueMixing.innerHTML = '';
+  pass.attentionWeights[index].forEach((weight, keyIndex) => {
+    const contribution = scaleVector(pass.valueVectors[keyIndex], weight);
+    const row = createElement('div', 'mix-row');
+    row.style.setProperty('--token-color', TOKEN_COLORS[keyIndex]);
+    row.appendChild(createElement('span', 'mix-token', SENTENCE_TOKENS[keyIndex]));
+    row.appendChild(createMixBar(weight));
+    row.appendChild(createElement('code', 'mix-vector',
+      `${formatNumber(weight, DISPLAY_DIGITS.weight)} × ${formatVector(pass.valueVectors[keyIndex], DISPLAY_DIGITS.vector)}` +
+      ` = ${formatVector(contribution, DISPLAY_DIGITS.vector)}`));
+    ui.valueMixing.appendChild(row);
+  });
+
+  // 4本を足した結果が z。STEP4 の締めくくりとして、同じ画面の中に置く。
+  const total = createElement('div', 'mix-total');
+  total.appendChild(createElement('span', 'mix-total-label', `4本を足すと z_${token} =`));
+  total.appendChild(createElement('code', '', formatVector(pass.contextVectors[index], DISPLAY_DIGITS.vector)));
+  ui.valueMixing.appendChild(total);
+}
+
+/** attention 重みを長さで示す棒。 */
+function createMixBar(weight) {
+  const track = createElement('span', 'mix-bar');
+  const fill = createElement('span', 'mix-bar-fill');
+  fill.style.width = `${weight * 100}%`;
+  track.appendChild(fill);
+  return track;
+}
+
+/** RESULT: 入力ベクトル x_i と文脈ベクトル z_i を並べ、何が変わったかを見せる。 */
+function renderVectorComparison(pass) {
+  const index = state.focusTokenIndex;
+  ui.vectorCompare.innerHTML = '';
+  ui.vectorCompare.appendChild(createComparisonBlock(
+    `入力 x_${SENTENCE_TOKENS[index]}（この語だけの情報）`,
+    pass.inputVectors[index], EMBEDDING_AXIS_LABELS));
+  ui.vectorCompare.appendChild(createElement('div', 'compare-arrow', '↓  self-attention'));
+  ui.vectorCompare.appendChild(createComparisonBlock(
+    `文脈 z_${SENTENCE_TOKENS[index]}（周りを取り込んだ情報）`,
+    pass.contextVectors[index], VALUE_AXIS_LABELS));
+}
+
+/** 比較ブロック1つぶん。軸の意味が違うので、ラベルも一緒に渡す。 */
+function createComparisonBlock(title, vector, axisLabels) {
+  const block = createElement('div', 'compare-block');
+  block.appendChild(createElement('p', 'compare-title', title));
+  block.appendChild(createVectorChips(vector, axisLabels, true));
+  return block;
+}
+
+/** RESULT の読み方を1文で述べる。何をどれだけ参照し、その結果 z が何の混合になったかを言う。 */
+function renderResultReading(pass) {
+  const index = state.focusTokenIndex;
+  const focusToken = SENTENCE_TOKENS[index];
+  const topIndex = argumentMaximum(pass.attentionWeights[index]);
+  const topPercent = Math.round(pass.attentionWeights[index][topIndex] * 100);
+  ui.resultReading.textContent =
+    `x_${focusToken} は "${focusToken}" の軸だけが 1 の、周りを何も知らないベクトルでした。` +
+    `attention を通すと "${SENTENCE_TOKENS[topIndex]}" を最も強く（${topPercent}%）参照し、` +
+    `z_${focusToken} は4本の value をその配分で混ぜたベクトルになります。` +
+    `他の3語も選んでみてください。同じ計算が、違う配分で走ります。`;
+}
+
+/* ===========================================================================
+ * 8. 描画 — 06: 4語ぶんまとめた行列
+ * ========================================================================= */
+
+/** 4×4 の attention 行列。行が query 側の語、列が key 側の語。 */
+function renderAttentionMatrix(pass) {
+  ui.attentionMatrix.innerHTML = '';
+  ui.attentionMatrix.style.setProperty('--token-count', String(SENTENCE_TOKENS.length));
+  ui.attentionMatrix.appendChild(createElement('div', 'matrix-corner', 'query \\ key'));
+  SENTENCE_TOKENS.forEach((token, index) => {
+    const header = createElement('div', 'matrix-head', token);
+    header.style.setProperty('--token-color', TOKEN_COLORS[index]);
+    ui.attentionMatrix.appendChild(header);
+  });
+
+  pass.attentionWeights.forEach((row, queryIndex) => {
+    ui.attentionMatrix.appendChild(createMatrixRowHeader(queryIndex));
+    row.forEach((weight, keyIndex) => {
+      ui.attentionMatrix.appendChild(createMatrixCell(
+        weight, isMaskedCell(pass, queryIndex, keyIndex), queryIndex === state.focusTokenIndex));
+    });
+  });
+}
+
+/**
+ * 行見出し。クリックするとその語で 05 を計算し直し、05 の先頭までスクロールして戻す。
+ * 行列は 05 の下にあるので、戻さないと「押したのに何も起きない」ように見えるためである。
+ */
+function createMatrixRowHeader(queryIndex) {
+  const header = createElement('button', 'matrix-row-head', SENTENCE_TOKENS[queryIndex]);
+  header.type = 'button';
+  header.style.setProperty('--token-color', TOKEN_COLORS[queryIndex]);
+  if (queryIndex === state.focusTokenIndex) header.classList.add('is-active');
+  header.addEventListener('click', () => {
+    state.focusTokenIndex = queryIndex;
+    renderAll();
+    ui.walkthrough.scrollIntoView({ block: 'start' });
+  });
+  return header;
+}
+
+/** 行列の1セル。attention 重みの大きさを背景の濃さで示す。 */
+function createMatrixCell(weight, isMasked, isFocusedRow) {
+  const cell = createElement('div', 'matrix-cell');
+  if (isMasked) {
+    cell.classList.add('is-masked');
+    cell.textContent = '—';
+    return cell;
+  }
+  if (isFocusedRow) cell.classList.add('in-focus-row');
+  cell.style.setProperty('--fill', String(weight));
+  cell.textContent = formatNumber(weight, DISPLAY_DIGITS.weight);
+  return cell;
+}
+
+/** 行列の下に置く説明文。トグルの状態で読み方が変わるので、そのつど作り直す。 */
+function renderMatrixCaption(pass) {
+  const divisorText = state.useScaling
+    ? `√d_k = √${MODEL_DIMENSIONS.key} ≈ ${formatNumber(pass.scaleDivisor, DISPLAY_DIGITS.vector)} で割っています`
+    : '√d_k で割っていません（内積をそのまま softmax に入れています）';
+  const maskText = state.useCausalMask
+    ? '因果マスクが有効なので、各語は自分より後ろを見られません（decoder / GPT 型）。'
+    : 'マスクなしなので、各語は文全体を双方向に見ています（encoder / BERT 型）。';
+  ui.matrixCaption.textContent =
+    `各行の和は 1 です。第 i 行が、05 で1語ぶん計算した配分そのものです。${divisorText}。${maskText}`;
+}
+
+/**
+ * 4行それぞれの読み方。数値は必ず計算結果から作る。
+ * 解説文に数字を直接書くと、トグルを切り替えたときにこの節だけが古い値のまま残る。
+ */
+function renderReadingList(pass) {
+  ui.readingList.innerHTML = '';
+  SENTENCE_TOKENS.forEach((token, queryIndex) => {
+    const weights = pass.attentionWeights[queryIndex];
+    const topIndex = argumentMaximum(weights);
+    const item = createElement('li');
+    item.appendChild(createElement('b', '', token));
+    item.appendChild(document.createTextNode(
+      ` は${QUERY_INTENTS[token]}を探すので、いま最も強く見ているのは "${SENTENCE_TOKENS[topIndex]}" ` +
+      `（${formatNumber(weights[topIndex], DISPLAY_DIGITS.weight)}）です。`));
+    item.appendChild(createElement('code', '', formatMixtureExpression(token, weights)));
+    ui.readingList.appendChild(item);
+  });
+}
+
+/** "z_I = 0.125·v_I + 0.730·v_like + …" の形の式を作る。無視できる項は落とす。 */
+function formatMixtureExpression(token, weights) {
+  const terms = SENTENCE_TOKENS
+    .map((other, keyIndex) => ({ other, weight: weights[keyIndex] }))
+    .filter((term) => term.weight >= NEGLIGIBLE_WEIGHT)
+    .map((term) => `${formatNumber(term.weight, DISPLAY_DIGITS.weight)}·v_${term.other}`);
+  return `z_${token} = ${terms.join(' + ')}`;
+}
+
+/* ===========================================================================
+ * 9. まとめて描き直す
+ * ========================================================================= */
+
 /** 状態から計算し直して全体を描き直す。入力は毎回作り直すが、量が小さいので問題にならない。 */
 function renderAll() {
   const pass = computeAttentionPass(buildInputVectors(), {
     useScaling: state.useScaling,
     useCausalMask: state.useCausalMask,
   });
-  ui.focusHeadline.textContent = `注目している語: "${SENTENCE_TOKENS[state.focusTokenIndex]}"`;
+
+  renderParameterTables(pass);
+
+  ui.focusHeadline.textContent = `いま追っている語: "${SENTENCE_TOKENS[state.focusTokenIndex]}"`;
   renderTokenButtons();
-  renderAttentionMatrix(pass);
-  renderMatrixCaption(pass);
   renderQueryStep(pass);
-  renderScoreTable(pass);
+  renderScoreStep(pass);
+  renderSoftmaxStep(pass);
   renderValueMixing(pass);
   renderVectorComparison(pass);
   renderResultReading(pass);
-  renderParameterTables(pass);
+
+  renderAttentionMatrix(pass);
+  renderMatrixCaption(pass);
+  renderReadingList(pass);
 }
 
 /* ===========================================================================
- * 7. 起動
+ * 10. 起動
  * ========================================================================= */
 
 function bindUserInterface() {
