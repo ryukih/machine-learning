@@ -280,21 +280,20 @@
       <h3 class="sub-head"><code>W^K</code> — 4語の key を、互いに違う向きに置く</h3>
       <p>
         <code>key</code> は「自分は何として差し出せるか」という見出しでした（02）。
-        4語ぶんの見出しに課される条件は1つだけです。<strong>互いに見分けられる向きを向いていること。</strong>
+        4語ぶんの見出しを、この平面のそれぞれ違う向きに置きます。
       </p>
       <div id="keyPlane"></div>
       <div id="keyTable" class="param-stack"></div>
       <p>
-        <strong>直交している必要も、等間隔である必要もありません。</strong>
-        実際この4本はどの2本も直交していません（<code>k_I·k_like = 0.58</code>、
-        <code>k_like·k_playing = −0.47</code>）。長さも 1 に揃えていません。
-        直交させれば内積が <code>0</code> や <code>±1</code> になって計算はきれいになりますが、
-        attention はその性質をまったく要求していませんし、学習で得られる本物の <code>key</code> もそうはなりません。
+        <strong>向きが互いに違うことが、そのまま「4語が見分けられる」ということです。</strong>
+        逆に2本の <code>key</code> をほとんど同じ向きに置くと、その2語はどの <code>query</code> から見ても
+        ほぼ同じ内積を返すので、区別できなくなります。
+        「背表紙がそっくりな2冊は探し分けられない」というだけのことで、
+        <code>key</code> の配置に効いてくるのはこの一点です。
       </p>
       <p class="note">
-        破綻するのは、2本の <code>key</code> が<strong>ほとんど同じ向き</strong>になったときだけです。
-        その2語は見出しとして区別できなくなり、どの <code>query</code> から見てもほぼ同じ重みを受け取ります。
-        これは不具合ではなく、「背表紙がそっくりな2冊は探し分けられない」という当たり前のことが数字に出ているだけです。
+        長さも揃っていません（1.04〜1.20）。内積は<strong>向きの近さと長さの積</strong>なので、
+        長い <code>key</code> はどの <code>query</code> からも少し強めに見られます。
       </p>
 
       <h3 class="sub-head"><code>W^Q</code> — 各語の query を、探したい相手の key へ向ける</h3>
@@ -310,12 +309,17 @@
         <code>q_like</code> は <code>k_playing</code> の方（動詞 → 目的語）、
         <code>q_playing</code> は <code>k_football</code> の方、
         <code>q_football</code> は <code>k_playing</code> の方を向いています。
-        ぴったり一致はさせていません。<strong>一致していなくても、内積が最大でありさえすれば勝てる</strong>からです。
+        向きはぴったり一致させていません。内積は向きが近いほど大きくなるので、
+        <strong>完全に一致していなくても、他の3つより内積が大きければ、
+        <code>softmax</code> のあとの配分もその語が最大になります。</strong>
       </p>
       <p>
-        矢印の<strong>向きが「どの語が勝つか」</strong>を決め、<strong>長さが「どれだけ差をつけるか」</strong>を決めます。
-        ここでは <code>query</code> の長さを 2.4 前後にしてあり、これが 05 で見る配分の鋭さになります。
-        短くすれば配分は平らに、長くすれば1語に集中します。
+        つまり <code>query</code> の<strong>向き</strong>が「<strong>どの語の内積が最も大きくなるか</strong>」を、
+        <strong>長さ</strong>が「<strong>その差をどれだけ広げるか</strong>」を決めます。
+        <code>query</code> を長くすると4つの内積がまとめて比例して大きくなり、
+        <code>softmax</code> に入る値の差も広がるので、配分が1語に集中します。
+        短くすれば差が縮まり、配分は平らに近づきます。
+        ここでは長さを 2.4 前後にしてあり、これが 05 で見る配分の鋭さになります。
       </p>
       <p class="note">
         これらの値は<strong>学習で得たものではなく、上のような関係が現れるように手で書いた</strong>ものです。
