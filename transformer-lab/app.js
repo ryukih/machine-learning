@@ -376,6 +376,29 @@ function argumentMaximum(values) {
   return values.reduce((bestIndex, value, index) => (value > values[bestIndex] ? index : bestIndex), 0);
 }
 
+/**
+ * 最大値を取る位置を「すべて」返す。因果マスクを掛けると同率首位が実際に起きるため
+ * （例: playing の行は I と playing がともに 0.461）、1つに決め打ちして
+ * 「最も強く見ているのは I」と言い切らないようにする。
+ * 表示桁で区別できない差は同率として扱う。
+ */
+function argumentMaxima(values) {
+  const maximumValue = Math.max(...values);
+  const tolerance = Math.pow(10, -DISPLAY_DIGITS.weight) / 2;
+  return values.reduce((indices, value, index) => {
+    if (maximumValue - value < tolerance) indices.push(index);
+    return indices;
+  }, []);
+}
+
+/** 「"football"（0.730）」「"I" と "playing"（同率 0.461）」のような語句を作る。 */
+function describeTopReferences(weights) {
+  const topIndices = argumentMaxima(weights);
+  const names = topIndices.map((index) => `"${SENTENCE_TOKENS[index]}"`).join(' と ');
+  const amount = formatNumber(weights[topIndices[0]], DISPLAY_DIGITS.weight);
+  return `${names}（${topIndices.length > 1 ? '同率 ' : ''}${amount}）`;
+}
+
 /** そのマスがマスクされているか。表示の分岐に何度も使うので関数にしておく。 */
 function isMaskedCell(pass, queryIndex, keyIndex) {
   return !Number.isFinite(pass.maskedScores[queryIndex][keyIndex]);
@@ -529,12 +552,46 @@ function renderSoftmaxStep(pass) {
   ]));
 }
 
-/** STEP4: value をどう混ぜたか。棒の長さが a_ij、右の数字が実際に足された a_ij·v_j。 */
+/**
+ * STEP4: value をどう混ぜたか。
+ *
+ * 最初に4段の階段を出す。記号 → 配分 → v の中身 → 結果 の順に1段ずつ具体化する。
+ *
+ *     z_i = Σ_j a_ij · v_j                        定義
+ *         = 0.125·v_I + … + 0.730·v_football      配分を入れた形。係数が混合比そのもの
+ *         = 0.125·[1.00, 0.20, 0.00, 0.00] + …    v の中身を開いた形。v ≠ x が見える
+ *         = [0.51, 0.09, 0.28, 0.75]              足し合わせた結果
+ *
+ * 2段目を必ず経由させるのが要点である。いきなり数値ベクトルへ展開すると、
+ * 「どの語から何割来たのか」という混合比が数字の中に埋もれてしまう。
+ * 3段目を省かないのも同じ理由で、v を記号のまま置くと
+ * 「重みが掛かる先は V であって埋め込み X ではない」ことが確認できない。
+ *
+ * 階段のあとに置く棒は、同じ足し算を語ごとの寄与として視覚化したものである。
+ */
 function renderValueMixing(pass) {
   const index = state.focusTokenIndex;
   const token = SENTENCE_TOKENS[index];
+  const weights = pass.attentionWeights[index];
   ui.valueMixing.innerHTML = '';
-  pass.attentionWeights[index].forEach((weight, keyIndex) => {
+
+  const ladder = createElement('div', 'mix-ladder');
+  appendLadderRow(ladder,
+    `z_${token} = Σ_j a_${token},j · v_j`,
+    '定義。STEP3 で得た配分で v を混ぜる');
+  appendLadderRow(ladder,
+    `= ${formatWeightedTerms(weights, (keyIndex) => `v_${SENTENCE_TOKENS[keyIndex]}`)}`,
+    'STEP3 の配分を入れる。係数が混合比そのもの');
+  appendLadderRow(ladder,
+    `= ${formatWeightedTerms(weights, (keyIndex) => formatVector(pass.valueVectors[keyIndex], DISPLAY_DIGITS.vector))}`,
+    'v の中身を開く。one-hot な x とは別のベクトル');
+  appendLadderRow(ladder,
+    `= ${formatVector(pass.contextVectors[index], DISPLAY_DIGITS.vector)}`,
+    `足し合わせた結果が文脈ベクトル z_${token}`);
+  ui.valueMixing.appendChild(ladder);
+
+  ui.valueMixing.appendChild(createElement('p', 'mix-bars-title', '同じ足し算を、語ごとの寄与として見る'));
+  weights.forEach((weight, keyIndex) => {
     const contribution = scaleVector(pass.valueVectors[keyIndex], weight);
     const row = createElement('div', 'mix-row');
     row.style.setProperty('--token-color', TOKEN_COLORS[keyIndex]);
@@ -545,12 +602,27 @@ function renderValueMixing(pass) {
       ` = ${formatVector(contribution, DISPLAY_DIGITS.vector)}`));
     ui.valueMixing.appendChild(row);
   });
+}
 
-  // 4本を足した結果が z。STEP4 の締めくくりとして、同じ画面の中に置く。
-  const total = createElement('div', 'mix-total');
-  total.appendChild(createElement('span', 'mix-total-label', `4本を足すと z_${token} =`));
-  total.appendChild(createElement('code', '', formatVector(pass.contextVectors[index], DISPLAY_DIGITS.vector)));
-  ui.valueMixing.appendChild(total);
+/** 階段の1段。左に式、右にその段が何をしたかの短い注釈を置く。 */
+function appendLadderRow(container, expressionText, noteText) {
+  const row = createElement('div', 'ladder-row');
+  row.appendChild(createElement('code', 'ladder-code', expressionText));
+  row.appendChild(createElement('span', 'ladder-note', noteText));
+  container.appendChild(row);
+}
+
+/**
+ * "0.125·v_I + 0.730·v_like + …" の形の線形結合を作る。
+ * describeTerm に何を返させるかで、記号のままの形にも、v の中身を開いた形にもなる。
+ * 因果マスクで 0 になった項は落とす。落とすこと自体が「その語は見ていない」の表示である。
+ */
+function formatWeightedTerms(weights, describeTerm) {
+  return weights
+    .map((weight, keyIndex) => ({ weight, keyIndex }))
+    .filter((term) => term.weight >= NEGLIGIBLE_WEIGHT)
+    .map((term) => `${formatNumber(term.weight, DISPLAY_DIGITS.weight)}·${describeTerm(term.keyIndex)}`)
+    .join(' + ');
 }
 
 /** attention 重みを長さで示す棒。 */
@@ -587,12 +659,10 @@ function createComparisonBlock(title, vector, axisLabels) {
 function renderResultReading(pass) {
   const index = state.focusTokenIndex;
   const focusToken = SENTENCE_TOKENS[index];
-  const topIndex = argumentMaximum(pass.attentionWeights[index]);
-  const topPercent = Math.round(pass.attentionWeights[index][topIndex] * 100);
   ui.resultReading.textContent =
     `x_${focusToken} は "${focusToken}" の軸だけが 1 の、周りを何も知らないベクトルでした。` +
-    `attention を通すと "${SENTENCE_TOKENS[topIndex]}" を最も強く（${topPercent}%）参照し、` +
-    `z_${focusToken} は4本の value をその配分で混ぜたベクトルになります。` +
+    `attention を通すと ${describeTopReferences(pass.attentionWeights[index])}を最も強く参照し、` +
+    `z_${focusToken} は value をその配分で混ぜたベクトルになります。` +
     `他の3語も選んでみてください。同じ計算が、違う配分で走ります。`;
 }
 
@@ -671,24 +741,18 @@ function renderReadingList(pass) {
   ui.readingList.innerHTML = '';
   SENTENCE_TOKENS.forEach((token, queryIndex) => {
     const weights = pass.attentionWeights[queryIndex];
-    const topIndex = argumentMaximum(weights);
     const item = createElement('li');
     item.appendChild(createElement('b', '', token));
     item.appendChild(document.createTextNode(
-      ` は${QUERY_INTENTS[token]}を探すので、いま最も強く見ているのは "${SENTENCE_TOKENS[topIndex]}" ` +
-      `（${formatNumber(weights[topIndex], DISPLAY_DIGITS.weight)}）です。`));
+      ` は${QUERY_INTENTS[token]}を探すので、いま最も強く見ているのは ${describeTopReferences(weights)}です。`));
     item.appendChild(createElement('code', '', formatMixtureExpression(token, weights)));
     ui.readingList.appendChild(item);
   });
 }
 
-/** "z_I = 0.125·v_I + 0.730·v_like + …" の形の式を作る。無視できる項は落とす。 */
+/** "z_I = 0.125·v_I + 0.730·v_like + …" の形の式を作る。STEP4 の階段の2段目と同じ形。 */
 function formatMixtureExpression(token, weights) {
-  const terms = SENTENCE_TOKENS
-    .map((other, keyIndex) => ({ other, weight: weights[keyIndex] }))
-    .filter((term) => term.weight >= NEGLIGIBLE_WEIGHT)
-    .map((term) => `${formatNumber(term.weight, DISPLAY_DIGITS.weight)}·v_${term.other}`);
-  return `z_${token} = ${terms.join(' + ')}`;
+  return `z_${token} = ${formatWeightedTerms(weights, (keyIndex) => `v_${SENTENCE_TOKENS[keyIndex]}`)}`;
 }
 
 /* ===========================================================================

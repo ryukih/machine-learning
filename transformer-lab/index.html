@@ -365,11 +365,17 @@
         <p class="step-number">STEP 4</p>
         <h3>その配分で <code>value</code> を混ぜる</h3>
         <p class="step-lead">
-          棒の長さが <code>a_ij</code>、右の式が実際に足し込まれた <code>a_ij · v_j</code> です。
-          <strong>混ざっているのは <code>v</code> であり、埋め込み <code>x</code> ではありません。</strong>
-          4本を足し合わせたものが、この語の文脈ベクトル <code>z_i = Σ_j a_ij v_j</code> です。
+          STEP 3 で配分 <code>a_i:</code> が決まりました。あとはその配分で <code>v</code> を混ぜるだけです。
+          下の式は、<strong>記号 → 配分 → <code>v</code> の中身 → 結果</strong>の順に、1段ずつ具体化したものです。
+          2段目の<strong>係数がそのまま混合比</strong>で、3段目で
+          <strong>混ざっているのが <code>v</code> であって埋め込み <code>x</code> ではない</strong>ことが見えます。
         </p>
         <div id="valueMixing"></div>
+        <p class="step-note">
+          2段目の <code>z_i = Σ_j a_ij v_j</code> という書き方が、self-attention の出力の定義そのものです。
+          <code>0.730·v_football</code> という項は「この語の新しいベクトルの 73% が
+          <code>football</code> の value から来ている」と読みます。
+        </p>
       </article>
 
       <article class="card step step-result">
@@ -423,6 +429,10 @@
       </p>
 
       <h3 class="reading-title">4行をそれぞれどう読むか</h3>
+      <p class="note">
+        STEP 4 の階段の2段目（<code>z = 0.125·v_I + …</code>）を、4語ぶん並べたものです。
+        係数を横に読めば、その語の新しいベクトルがどこから何割来ているかが分かります。
+      </p>
       <ul class="reading-list" id="readingList"></ul>
 
       <p>

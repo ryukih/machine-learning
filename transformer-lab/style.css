@@ -445,7 +445,46 @@ p:last-child { margin-bottom: 0; }
 }
 .score-table tfoot th { text-align: left; color: var(--muted); }
 
-/* ---- STEP4: value の合成 ----------------------------------------------- */
+/* ---- STEP4: value の合成 -----------------------------------------------
+ * 上段が「記号 → 配分 → v の中身 → 結果」の4段の階段、下段が同じ足し算の棒。
+ * 階段の各段は、左に式、右にその段が何をしたかの注釈を置く2列で組む。
+ * 式は横に長くなりうるので、段ごとに独立して横スクロールさせる。
+ * ---------------------------------------------------------------------- */
+.mix-ladder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 22px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border-left: 4px solid var(--green);
+  background: rgba(5,150,105,.07);
+}
+.ladder-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 6px 16px;
+}
+.ladder-code {
+  display: block;
+  overflow-x: auto;
+  padding: 0;
+  background: none;
+  white-space: pre;
+  font-size: .84rem;
+  color: #1f2c44;
+}
+.ladder-note { font-size: .74rem; color: var(--muted); white-space: nowrap; }
+
+.mix-bars-title {
+  margin: 0 0 6px;
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .1em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
 .mix-row {
   display: grid;
   grid-template-columns: 5.5rem minmax(4rem, 1fr) auto;
@@ -464,21 +503,6 @@ p:last-child { margin-bottom: 0; }
   color: #33415c;
   white-space: nowrap;
 }
-/* 4本を足し合わせた行。ここが z の定義そのものなので、他の行と区別する。 */
-.mix-total {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 12px;
-  margin-top: 12px;
-  padding: 10px 14px;
-  border-radius: 12px;
-  background: rgba(5,150,105,.08);
-  border-left: 4px solid var(--green);
-}
-.mix-total-label { font-size: .8rem; font-weight: 800; color: var(--green); }
-.mix-total code { background: none; padding: 0; font-size: .82rem; }
-
 /* ---- RESULT: 入力と文脈の比較 ------------------------------------------ */
 .compare-block { padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line); background: #fbfdff; }
 .compare-title { margin: 0; font-size: .82rem; font-weight: 800; color: var(--muted); }
@@ -656,6 +680,9 @@ footer {
   .focus-headline { margin-left: 0; width: 100%; }
   .mix-row { grid-template-columns: 1fr; gap: 6px; }
   .mix-vector { white-space: normal; }
+  /* 階段は式を優先し、注釈を式の下へ回す */
+  .ladder-row { grid-template-columns: 1fr; gap: 2px; }
+  .ladder-note { white-space: normal; }
   .flow-list { padding-left: 20px; }
   .flow-item::before { left: -27px; }
 }
