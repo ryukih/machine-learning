@@ -36,12 +36,18 @@
   【app.js との対応】
     次の id が app.js の ELEMENT_IDS から参照される。変更する場合は両方を直すこと。
 
-        parameterTables    04 に置く行列表（X, W^Q, W^K, W^V）
+        inputTable         04: 入力 X の表
+        keyPlane           04: d_k = 2 の平面に4つの key を描いた図（SVG）
+        keyTable           04: W^K の表
+        queryPlane         04: 同じ平面に query を重ねた図（SVG）
+        queryTable         04: W^Q の表
+        valueTable         04: W^V の表
         tokenButtons       注目する語を選ぶボタン列（app.js が生成）
         focusHeadline      いま注目している語（sticky バーの中）
         walkthrough        05 の先頭。行列の行見出しから戻るときのスクロール先
         queryStep          STEP1 の内容
         scaleToggle        √d_k で割るかどうかの切り替え（STEP2 の中）
+        scorePlane         STEP2: 4つの key と、選んでいる語の query を重ねた図（SVG）
         scoreTableBody     STEP2 の表（内積とスケーリング）
         scaledScoreHead    STEP2 の表のうち、割るかどうかで文言が変わる列見出し
         softmaxTableBody   STEP3 の表（softmax の中身）
@@ -250,19 +256,86 @@
         <code>V = X W^V    W^V ∈ ℝ^(d_model×d_v)    d_v = 4   ← 次元は q, k と違ってよい</code>
       </div>
       <p>
-        使う値をここで全部出します。<code>X</code> が one-hot なので、
-        <strong>下の3つの重み行列は「語ごとの query / key / value の一覧表」としてそのまま読めます</strong>。
+        <code>X</code> が one-hot なので、<strong>3つの重み行列はそのまま
+        「語ごとの query / key / value の一覧表」として読めます</strong>（03）。
+        入力の <code>X</code> は次のとおりです。
+      </p>
+      <div id="inputTable" class="param-stack"></div>
+
+      <h3 class="sub-head">この平面の「軸」には意味がない</h3>
+      <p>
+        <code>d_k = 2</code> は <code>query</code> と <code>key</code> が住む平面です。
+        03 で見た埋め込みの軸は「その語が <code>t</code> 番目の語かどうか」という意味を持っていましたが、
+        <strong>この平面の軸には対応する意味がありません</strong>。理由ははっきりしています。
+        attention がこの平面から取り出す情報は<strong>内積 <code>q·k</code> だけ</strong>で、
+        すべての <code>q</code> と <code>k</code> を<strong>同じ角度だけ回転させても内積は1つも変わらない</strong>からです。
+        当然、出てくる <code>z</code> も完全に同じになります。
+      </p>
+      <p>
+        つまり座標軸の取り方は任意で、意味を持つのは<strong>ベクトルどうしの相対的な向きと長さ</strong>だけです。
+        そのためこのページは軸に名前を付けず、表の列見出しでは <code>軸1</code>, <code>軸2</code> と番号でだけ呼びます。
+        以下では、この平面に矢印を描いて数値と並べます。<strong>表の数値は、そのまま矢印の座標です。</strong>
       </p>
 
-      <div id="parameterTables" class="param-stack"></div>
-
+      <h3 class="sub-head"><code>W^K</code> — 4語の key を、互いに違う向きに置く</h3>
+      <p>
+        <code>key</code> は「自分は何として差し出せるか」という見出しでした（02）。
+        4語ぶんの見出しに課される条件は1つだけです。<strong>互いに見分けられる向きを向いていること。</strong>
+      </p>
+      <div id="keyPlane"></div>
+      <div id="keyTable" class="param-stack"></div>
+      <p>
+        <strong>直交している必要も、等間隔である必要もありません。</strong>
+        実際この4本はどの2本も直交していません（<code>k_I·k_like = 0.58</code>、
+        <code>k_like·k_playing = −0.47</code>）。長さも 1 に揃えていません。
+        直交させれば内積が <code>0</code> や <code>±1</code> になって計算はきれいになりますが、
+        attention はその性質をまったく要求していませんし、学習で得られる本物の <code>key</code> もそうはなりません。
+      </p>
       <p class="note">
-        <code>X</code> が単位行列なので、計算後の <code>Q</code>, <code>K</code>, <code>V</code> は
-        それぞれ <code>W^Q</code>, <code>W^K</code>, <code>W^V</code> と<strong>数値がまったく同じ表になります</strong>。
-        行列の掛け算が表引きに退化しているだけで、式は何も変わっていません。
-        一方で <code>W^V</code> の各行は one-hot ではありません。
-        この <strong><code>v_j ≠ x_j</code></strong> が、02 の
+        破綻するのは、2本の <code>key</code> が<strong>ほとんど同じ向き</strong>になったときだけです。
+        その2語は見出しとして区別できなくなり、どの <code>query</code> から見てもほぼ同じ重みを受け取ります。
+        これは不具合ではなく、「背表紙がそっくりな2冊は探し分けられない」という当たり前のことが数字に出ているだけです。
+      </p>
+
+      <h3 class="sub-head"><code>W^Q</code> — 各語の query を、探したい相手の key へ向ける</h3>
+      <p>
+        <code>query</code> は「何を探しているか」でした。ここでは各語の <code>query</code> を、
+        <strong>その語が見つけたい相手の <code>key</code> の方向</strong>へ向けてあります。
+        下の図の破線が <code>query</code>、薄い実線が先ほどの <code>key</code> です。
+      </p>
+      <div id="queryPlane"></div>
+      <div id="queryTable" class="param-stack"></div>
+      <p>
+        <code>q_I</code> は <code>k_like</code> の方（主語 → 述語）、
+        <code>q_like</code> は <code>k_playing</code> の方（動詞 → 目的語）、
+        <code>q_playing</code> は <code>k_football</code> の方、
+        <code>q_football</code> は <code>k_playing</code> の方を向いています。
+        ぴったり一致はさせていません。<strong>一致していなくても、内積が最大でありさえすれば勝てる</strong>からです。
+      </p>
+      <p>
+        矢印の<strong>向きが「どの語が勝つか」</strong>を決め、<strong>長さが「どれだけ差をつけるか」</strong>を決めます。
+        ここでは <code>query</code> の長さを 2.4 前後にしてあり、これが 05 で見る配分の鋭さになります。
+        短くすれば配分は平らに、長くすれば1語に集中します。
+      </p>
+      <p class="note">
+        これらの値は<strong>学習で得たものではなく、上のような関係が現れるように手で書いた</strong>ものです。
+        本物のモデルは、この向き合わせをデータから学習します。
+      </p>
+
+      <h3 class="sub-head"><code>W^V</code> — 中身は、見出しと無関係でよい</h3>
+      <p>
+        <code>value</code> に課される条件はさらに緩く、<code>key</code> と揃っている必要すらありません。
+        住む空間も別で、ここでは <code>d_v = 4</code> です。
+        こちらの軸にも意味はないので、同じく <code>軸1</code>〜<code>軸4</code> と番号で呼びます。
+      </p>
+      <div id="valueTable" class="param-stack"></div>
+      <p class="note">
+        各行が one-hot ではないことに注目してください。この
+        <strong><code>v_j ≠ x_j</code></strong> が、02 の
         「重みが掛かる先は <code>V</code> であって埋め込みではない」の具体的な中身です。
+        なお <code>X</code> が単位行列なので、計算後の <code>Q</code>, <code>K</code>, <code>V</code> は
+        それぞれ <code>W^Q</code>, <code>W^K</code>, <code>W^V</code> と数値がまったく同じ表になります。
+        行列の掛け算が表引きに退化しているだけで、式は何も変わっていません。
       </p>
     </section>
 
@@ -307,6 +380,12 @@
           <strong>自分自身の key とも取ります</strong>（self-attention なので自分も参照先の候補です）。
           内積が大きいほど「噛み合っている」ことになります。
         </p>
+        <p class="step-lead">
+          04 の平面に、いま選んでいる語の <code>q</code> だけを重ねたのが下の図です。
+          <strong><code>q</code> に向きが近い <code>k</code> ほど内積が大きくなります。</strong>
+          表の「q · k_j（生）」の列は、この図を数値にしたものです。
+        </p>
+        <div id="scorePlane"></div>
         <div class="table-scroll">
           <table class="score-table">
             <thead>
@@ -373,7 +452,7 @@
         <div id="valueMixing"></div>
         <p class="step-note">
           2段目の <code>z_i = Σ_j a_ij v_j</code> という書き方が、self-attention の出力の定義そのものです。
-          <code>0.730·v_football</code> という項は「この語の新しいベクトルの 73% が
+          たとえば <code>0.784·v_football</code> という項は「この語の新しいベクトルの 78% が
           <code>football</code> の value から来ている」と読みます。
         </p>
       </article>
@@ -430,7 +509,7 @@
 
       <h3 class="reading-title">4行をそれぞれどう読むか</h3>
       <p class="note">
-        STEP 4 の階段の2段目（<code>z = 0.125·v_I + …</code>）を、4語ぶん並べたものです。
+        STEP 4 の階段の2段目（<code>z = 0.098·v_I + …</code>）を、4語ぶん並べたものです。
         係数を横に読めば、その語の新しいベクトルがどこから何割来ているかが分かります。
       </p>
       <ul class="reading-list" id="readingList"></ul>

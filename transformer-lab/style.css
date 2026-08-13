@@ -274,6 +274,46 @@ p:last-child { margin-bottom: 0; }
 .callout b { color: var(--green); }
 .callout em { font-style: normal; text-decoration: underline; text-underline-offset: 3px; }
 
+/* ---- 節の中の小見出し -------------------------------------------------- */
+.sub-head {
+  margin: 26px 0 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 1.02rem;
+  color: var(--green);
+}
+
+/* ---- d_k = 2 の平面（SVG） ---------------------------------------------
+ * q と k を矢印として同じ平面に描く図。app.js が SVG 要素を組み立て、
+ * 色だけは要素の stroke / fill にインラインで入る（トークンごとの色のため）。
+ * ここでは線の太さ・破線・文字サイズなど、色以外の見た目を持つ。
+ * ---------------------------------------------------------------------- */
+.vector-plane { margin: 0 0 16px; }
+.vector-plane svg {
+  display: block;
+  width: 100%;
+  max-width: 330px;
+  height: auto;
+  margin: 0 auto;
+  font-family: inherit;
+}
+.vector-plane figcaption {
+  margin-top: 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: .82rem;
+}
+/* 長さの目安になる半径 1・2 の円。軸に意味はないので目盛りは振らない。 */
+.plane-circle { fill: none; stroke: var(--line); stroke-dasharray: 3 5; }
+.plane-axis { stroke: #ccd8e6; stroke-width: 1; }
+.plane-axis-label { fill: var(--muted); font-size: 11px; font-weight: 700; }
+.plane-label { font-size: 11.5px; font-weight: 800; }
+.plane-vector { stroke-width: 2.4; stroke-linecap: round; }
+/* query を重ねる図で、背景に回る key を弱める */
+.plane-vector.is-faint { stroke-width: 1.4; opacity: .4; }
+/* query は破線。key と一目で見分けるため */
+.plane-vector.is-query { stroke-dasharray: 6 4; }
+
 /* ---- 04: パラメータ表（縦積み・表そのものは中身の幅） ------------------ */
 .param-stack {
   display: flex;

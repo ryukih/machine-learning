@@ -11,9 +11,9 @@
  * 【描画の順序 — index.html の一本道に合わせる】
  *   ページは 01 → 08 の一方向に進む構成であり、このファイルもその順に描く。
  *
- *       04  renderParameterTables   使う行列（X, W^Q, W^K, W^V）を先に開示する
+ *       04  renderProjectionSection 使う行列（X, W^K, W^Q, W^V）を、平面の図と交互に開示する
  *       05  renderQueryStep         STEP1 : q を1本作る
- *           renderScoreStep         STEP2 : 4つの k との内積、√d_k で割る
+ *           renderScoreStep         STEP2 : q と4つの k を1枚の平面に重ね、内積を取る
  *           renderSoftmaxStep       STEP3 : softmax の中身（exp と正規化）を分解して見せる
  *           renderValueMixing       STEP4 : 配分で v を混ぜ、最後に z として足し合わせる
  *           renderVectorComparison  RESULT: x と z を並べる
@@ -62,16 +62,24 @@
  *   次元は MODEL_DIMENSIONS に、各軸が表す意味は *_AXIS_LABELS に集約している。
  *
  * 【重みの出どころ — 重要】
- *   QUERY_WEIGHTS / KEY_WEIGHTS / VALUE_WEIGHTS は
- *   学習で得た値ではない。読者が電卓で追える大きさに収め、かつ
- *   「主語は述語を探す」「動詞は目的語を探す」という関係が現れるように、
- *   人手で書き込んだ値である。本物のモデルはこれをデータから学習する。
+ *   QUERY_WEIGHTS / KEY_WEIGHTS / VALUE_WEIGHTS は学習で得た値ではない。
+ *   「主語は述語を探す」「動詞は目的語を探す」という関係が現れるように人手で
+ *   書き込んだ値である。本物のモデルはこれをデータから学習する。
  *   ここで示したいのは値そのものではなく、値がどう流れて文脈ベクトルになるかである。
  *
+ *   ただし、値を「きれいに」はしていない。key を直交させたり等間隔に並べたりすると
+ *   内積が 0 や ±1 になって手計算は楽になるが、attention はその性質を要求していない。
+ *   一般の配置でも同じように動くことを示すほうが正しいので、4本の key は
+ *   互いに違う向きを向いているだけの、直交も等間隔もしていないベクトルにしてある。
+ *
  * 【q / k / v の軸に名前を付けていない理由】
- *   実際のモデルでは、これらの空間の各軸に人間が読める意味はない。意味を持つのは
- *   軸ではなく、内積の大小（＝どれだけ参照するか）と、混ざった結果のベクトルである。
+ *   attention がこの空間から取り出す情報は内積 q·k だけである。すべての q と k を
+ *   同じ回転で回しても内積は1つも変わらないので、出力 z も変わらない。つまり座標の
+ *   取り方は任意で、意味を持つのはベクトルどうしの相対的な向きと長さだけである。
  *   したがって軸は「軸1」「軸2」と番号でだけ呼ぶ。
+ *   この事情は目で見たほうが早いので、d_k = 2 の平面そのものを SVG で描いている
+ *   （renderVectorPlane）。q と k を矢印として並べると、表の数値が矢印の座標として、
+ *   内積の大小が矢印どうしの向きの近さとして読める。
  *
  * 【index.html との対応】
  *   参照する要素の id は ELEMENT_IDS に集約している。HTML 側で id を変えるときは
@@ -125,27 +133,43 @@ const TOKEN_EMBEDDINGS = {
 };
 
 /**
- * W^Q : 埋め込み → query。X が one-hot なので、第 t 行がそのまま語 t の query である。
- * 「どの語を探しに行くか」を、その語の key と同じ向きを指すベクトルとして書き込んである。
- * 大きさ 2.5 は softmax の鋭さを決める。大きいほど1語に集中する。
+ * W^K : 埋め込み → key。第 t 行がそのまま語 t の key である。
+ *
+ * 4語を d_k = 2 の平面上の互いに違う向きに置いてあるだけで、
+ * 直交も等間隔も課していない。実際どの2本も直交していない。
+ *
+ *     k_I·k_like = 0.58   k_like·k_playing = -0.47   k_playing·k_football = -0.03
+ *
+ * key に必要な条件は「4語が互いに見分けられる向きを向いていること」だけである。
+ * 直交させると内積が 0 になって手計算はきれいになるが、その性質を attention は
+ * 要求していないし、学習で得られる本物の key もそうはならない。
+ * 逆に2本の key をほとんど同じ向きにすると、その2語は key として区別できなくなり、
+ * どの query から見てもほぼ同じ重みになる。それが唯一の制約である。
+ *
+ * 長さも 1 に揃えていない（1.04〜1.20）。長い key はどの query からも
+ * 少しずつ強く見られる、という効果を持つだけで、仕組みは変わらない。
  */
-const QUERY_WEIGHTS = [
-  [ 0.0,  2.5], // I        : like の key の向きを指す（主語 → 述語）
-  [-2.5,  0.0], // like     : playing の key の向きを指す（動詞 → 目的語）
-  [ 0.0, -2.5], // playing  : football の key の向きを指す（動詞 → 目的語）
-  [-2.2, -0.8], // football : playing を指しつつ like からは離す（目的語 → 述語）
+const KEY_WEIGHTS = [
+  [ 1.0,  0.4], // I        : 約  22°, 長さ 1.08
+  [ 0.1,  1.2], // like     : 約  85°, 長さ 1.20
+  [-1.1, -0.3], // playing  : 約 195°, 長さ 1.14
+  [ 0.3, -1.0], // football : 約 287°, 長さ 1.04
 ];
 
 /**
- * W^K : 埋め込み → key。第 t 行がそのまま語 t の key である。
- * 4語を平面上の 0°, 90°, 180°, 270° に置いて、互いに区別できるようにしている。
- * 直交する組の内積は 0、反対向きの組は負になる。
+ * W^Q : 埋め込み → query。X が one-hot なので、第 t 行がそのまま語 t の query である。
+ *
+ * 各行を「その語が見つけたい相手の key の向き」へ向けてある。厳密に一致させてはおらず、
+ * 数度ずらしてあるのは、一致していなくても内積が最大なら勝てるためである。
+ *
+ * 向きが「誰が勝つか」を決め、長さが「どれだけ差をつけるか」を決める。
+ * ここでは長さを 2.4 前後にしている。長くするほど softmax が鋭くなり1語に集中する。
  */
-const KEY_WEIGHTS = [
-  [ 1.0,  0.0], // I        :   0°
-  [ 0.0,  1.0], // like     :  90°
-  [-1.0,  0.0], // playing  : 180°
-  [ 0.0, -1.0], // football : 270°
+const QUERY_WEIGHTS = [
+  [ 0.3,  2.4], // I        : 約  83° → k_like   の向き（主語 → 述語）
+  [-2.4, -0.6], // like     : 約 194° → k_playing の向き（動詞 → 目的語）
+  [ 0.8, -2.5], // playing  : 約 288° → k_football の向き（動詞 → 目的語）
+  [-2.2, -0.9], // football : 約 202° → k_playing の向き。like からは離してある（目的語 → 述語）
 ];
 
 /**
@@ -191,12 +215,18 @@ const DISPLAY_DIGITS = {
 
 /** index.html から参照する要素の id。 */
 const ELEMENT_IDS = {
-  parameterTables: 'parameterTables',
+  inputTable: 'inputTable',
+  keyPlane: 'keyPlane',
+  keyTable: 'keyTable',
+  queryPlane: 'queryPlane',
+  queryTable: 'queryTable',
+  valueTable: 'valueTable',
   walkthrough: 'walkthrough',
   tokenButtons: 'tokenButtons',
   focusHeadline: 'focusHeadline',
   queryStep: 'queryStep',
   scaleToggle: 'scaleToggle',
+  scorePlane: 'scorePlane',
   scoreTableBody: 'scoreTableBody',
   scaledScoreHead: 'scaledScoreHead',
   softmaxTableBody: 'softmaxTableBody',
@@ -399,6 +429,17 @@ function describeTopReferences(weights) {
   return `${names}（${topIndices.length > 1 ? '同率 ' : ''}${amount}）`;
 }
 
+/**
+ * 2つのベクトルの向きの近さ（余弦類似度）。長さの効果を除いた「角度だけ」の指標である。
+ * 内積は「向きの近さ × 両者の長さ」なので、key の長さが揃っていない場合、
+ * 最も向きが近い key と、内積が最大の key は一致しないことがありうる。
+ * 平面図の説明文でそこを言い分けるために使う。計算そのものには使わない。
+ */
+function cosineSimilarity(leftVector, rightVector) {
+  const denominator = Math.hypot(...leftVector) * Math.hypot(...rightVector);
+  return denominator === 0 ? 0 : dotProduct(leftVector, rightVector) / denominator;
+}
+
 /** そのマスがマスクされているか。表示の分岐に何度も使うので関数にしておく。 */
 function isMaskedCell(pass, queryIndex, keyIndex) {
   return !Number.isFinite(pass.maskedScores[queryIndex][keyIndex]);
@@ -416,26 +457,145 @@ const state = {
 };
 
 /* ===========================================================================
- * 6. 描画 — 04: 使用する行列
+ * 6. 描画 — d_k = 2 の平面を SVG で描く
+ *
+ *   d_k を 2 にしてあるのは、query と key の関係を「平面上の矢印」として
+ *   そのまま描けるからである。表の数値は矢印の座標、内積の大小は矢印どうしの
+ *   向きの近さに対応する。外部ライブラリは使わず SVG 要素を直接組み立てる。
  * ========================================================================= */
 
-/**
- * 04 に置く行列表。X が one-hot なので Q, K, V は W^Q, W^K, W^V と数値が一致する。
- * 同じ数字の表を7枚並べても読者の負荷が増えるだけなので、ここでは元になる4枚だけを出し、
- * 一致することは本文の1文で述べている。
- */
-function renderParameterTables(pass) {
-  ui.parameterTables.innerHTML = '';
-  ui.parameterTables.appendChild(createMatrixTable(
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
+/** 平面の描画寸法。scale は「1.0 を何ピクセルで描くか」。 */
+const PLANE = {
+  scale: 38,
+  extent: 132,   // viewBox の半径。|q| ≒ 2.5 のラベルまで収まる大きさにする
+  headLength: 9, // 矢じりの長さ
+};
+
+/** 属性を指定して SVG 要素を作る。HTML 要素とは名前空間が違うので createElementNS を使う。 */
+function createSvgElement(tagName, attributes) {
+  const element = document.createElementNS(SVG_NAMESPACE, tagName);
+  Object.entries(attributes).forEach(([name, value]) => element.setAttribute(name, String(value)));
+  return element;
+}
+
+/** 数学の座標を SVG の座標に直す。SVG は下方向が正なので y だけ符号を反転する。 */
+function planeX(value) { return value * PLANE.scale; }
+function planeY(value) { return -value * PLANE.scale; }
+
+/** 平面に文字を置く。 */
+function appendPlaneText(svg, x, y, text, anchor, className) {
+  const element = createSvgElement('text', { x, y, 'text-anchor': anchor, class: className });
+  element.textContent = text;
+  svg.appendChild(element);
+  return element;
+}
+
+/** 軸と、長さの目安になる半径 1・2 の円。軸に意味はないので目盛りは振らない。 */
+function appendPlaneFrame(svg) {
+  [1, 2].forEach((radius) => {
+    svg.appendChild(createSvgElement('circle', { cx: 0, cy: 0, r: radius * PLANE.scale, class: 'plane-circle' }));
+  });
+  svg.appendChild(createSvgElement('line', { x1: -PLANE.extent, y1: 0, x2: PLANE.extent, y2: 0, class: 'plane-axis' }));
+  svg.appendChild(createSvgElement('line', { x1: 0, y1: -PLANE.extent, x2: 0, y2: PLANE.extent, class: 'plane-axis' }));
+  appendPlaneText(svg, PLANE.extent - 2, 13, SCORE_SPACE_AXIS_LABELS[0], 'end', 'plane-axis-label');
+  appendPlaneText(svg, 5, -PLANE.extent + 12, SCORE_SPACE_AXIS_LABELS[1], 'start', 'plane-axis-label');
+}
+
+/** 原点から1本の矢印を描き、その先にラベルを置く。 */
+function appendPlaneArrow(svg, arrow) {
+  const tipX = planeX(arrow.vector[0]);
+  const tipY = planeY(arrow.vector[1]);
+  const length = Math.hypot(tipX, tipY);
+  if (length < 1) return;
+
+  const unitX = tipX / length;
+  const unitY = tipY / length;
+  const baseX = tipX - unitX * PLANE.headLength;
+  const baseY = tipY - unitY * PLANE.headLength;
+  const halfWidth = PLANE.headLength * 0.42;
+
+  svg.appendChild(createSvgElement('line', {
+    x1: 0, y1: 0, x2: baseX, y2: baseY, stroke: arrow.color, class: arrow.className,
+  }));
+  svg.appendChild(createSvgElement('polygon', {
+    points: [
+      `${tipX},${tipY}`,
+      `${baseX - unitY * halfWidth},${baseY + unitX * halfWidth}`,
+      `${baseX + unitY * halfWidth},${baseY - unitX * halfWidth}`,
+    ].join(' '),
+    fill: arrow.color,
+    class: arrow.className,
+  }));
+
+  const labelX = tipX + unitX * 13;
+  const labelY = tipY + unitY * 13 + 4;
+  const anchor = labelX > 4 ? 'start' : (labelX < -4 ? 'end' : 'middle');
+  appendPlaneText(svg, labelX, labelY, arrow.label, anchor, arrow.className + ' plane-label')
+    .setAttribute('fill', arrow.color);
+}
+
+/** 矢印の集合を1枚の平面として描く。arrows は先に描いたものが下に来る。 */
+function renderVectorPlane(container, arrows, description) {
+  container.innerHTML = '';
+  const figure = createElement('figure', 'vector-plane');
+  const svg = createSvgElement('svg', {
+    viewBox: `${-PLANE.extent} ${-PLANE.extent} ${PLANE.extent * 2} ${PLANE.extent * 2}`,
+    role: 'img',
+    'aria-label': description,
+  });
+  appendPlaneFrame(svg);
+  arrows.forEach((arrow) => appendPlaneArrow(svg, arrow));
+  figure.appendChild(svg);
+  figure.appendChild(createElement('figcaption', '', description));
+  container.appendChild(figure);
+}
+
+/** 語ごとの矢印の定義をまとめて作る。 */
+function buildTokenArrows(vectors, prefix, className) {
+  return SENTENCE_TOKENS.map((token, index) => ({
+    vector: vectors[index],
+    color: TOKEN_COLORS[index],
+    label: `${prefix}_${token}`,
+    className,
+  }));
+}
+
+/* ===========================================================================
+ * 7. 描画 — 04: 使用する行列と、その平面での姿
+ *
+ *   key を先に出し、query を後に出す。query は「どの key を探すか」で向きが
+ *   決まるので、key を知らないと query の数値を読む足場が無いためである。
+ *   X が one-hot なので Q, K, V は W^Q, W^K, W^V と数値が一致する。
+ *   同じ数字の表を重ねて出さず、一致することは本文の1文で述べている。
+ * ========================================================================= */
+
+function renderProjectionSection(pass) {
+  ui.inputTable.innerHTML = '';
+  ui.inputTable.appendChild(createMatrixTable(
     'X : 入力（one-hot 埋め込み）— 行が語、列が埋め込みの軸',
     SENTENCE_TOKENS, EMBEDDING_AXIS_LABELS, pass.inputVectors));
-  ui.parameterTables.appendChild(createMatrixTable(
-    'W^Q : 語ごとの query 一覧（d_k = 2）',
-    EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, QUERY_WEIGHTS));
-  ui.parameterTables.appendChild(createMatrixTable(
-    'W^K : 語ごとの key 一覧（q と内積を取るので同じ d_k = 2）',
+
+  renderVectorPlane(ui.keyPlane,
+    buildTokenArrows(pass.keyVectors, 'k', 'plane-vector'),
+    '4語の key を d_k = 2 の平面に置いたもの。互いに違う向きでありさえすればよく、直交も等間隔もしていない。');
+  ui.keyTable.innerHTML = '';
+  ui.keyTable.appendChild(createMatrixTable(
+    'W^K : 語ごとの key 一覧（上の図の矢印の座標そのもの）',
     EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, KEY_WEIGHTS));
-  ui.parameterTables.appendChild(createMatrixTable(
+
+  renderVectorPlane(ui.queryPlane,
+    buildTokenArrows(pass.keyVectors, 'k', 'plane-vector is-faint')
+      .concat(buildTokenArrows(pass.queryVectors, 'q', 'plane-vector is-query')),
+    '同じ平面に query（破線）を重ねたもの。各 query は、その語が見つけたい相手の key の方を向いている。');
+  ui.queryTable.innerHTML = '';
+  ui.queryTable.appendChild(createMatrixTable(
+    'W^Q : 語ごとの query 一覧（k と内積を取るので同じ d_k = 2）',
+    EMBEDDING_AXIS_LABELS, SCORE_SPACE_AXIS_LABELS, QUERY_WEIGHTS));
+
+  ui.valueTable.innerHTML = '';
+  ui.valueTable.appendChild(createMatrixTable(
     'W^V : 語ごとの value 一覧（d_v = 4。各行が one-hot でないことに注目）',
     EMBEDDING_AXIS_LABELS, VALUE_AXIS_LABELS, VALUE_WEIGHTS));
 }
@@ -471,7 +631,7 @@ function createTableHeadRow(columnLabels) {
 }
 
 /* ===========================================================================
- * 7. 描画 — 05: 1語を最後まで追う
+ * 8. 描画 — 05: 1語を最後まで追う
  * ========================================================================= */
 
 /** 注目する語を選ぶボタン列。sticky バーの中にあり、STEP を読みながら切り替えられる。 */
@@ -505,9 +665,36 @@ function renderQueryStep(pass) {
   ui.queryStep.appendChild(createVectorChips(pass.queryVectors[index], SCORE_SPACE_AXIS_LABELS, false));
 }
 
-/** STEP2 の表。1行が「相手の語 j」に対応し、k_j と内積、スケーリング後までを並べる。 */
+/**
+ * STEP2 の平面と表。
+ * 平面には4つの key と、いま選んでいる語の query だけを重ねる。
+ * 「q に向きが近い k ほど内積が大きい」という、表の数値の由来をそのまま絵にしたものである。
+ */
 function renderScoreStep(pass) {
   const queryIndex = state.focusTokenIndex;
+  const token = SENTENCE_TOKENS[queryIndex];
+  const rawScores = pass.rawScores[queryIndex];
+  const queryVector = pass.queryVectors[queryIndex];
+  const nearestIndex = argumentMaximum(pass.keyVectors.map((key) => cosineSimilarity(queryVector, key)));
+  const largestIndex = argumentMaximum(rawScores);
+  // 向きが最も近い key と、内積が最大の key は、key の長さが揃っていなければ食い違いうる。
+  // 食い違ったときはそれ自体が「内積は向きと長さの両方で決まる」ことの実例なので、そう述べる。
+  const planeDescription = nearestIndex === largestIndex
+    ? `q_${token}（破線）に最も向きが近いのは k_${SENTENCE_TOKENS[nearestIndex]} で、` +
+      `内積も ${formatNumber(rawScores[largestIndex], DISPLAY_DIGITS.score)} で最大になります。`
+    : `q_${token}（破線）に最も向きが近いのは k_${SENTENCE_TOKENS[nearestIndex]} ですが、` +
+      `内積が最大なのは k_${SENTENCE_TOKENS[largestIndex]}（${formatNumber(rawScores[largestIndex], DISPLAY_DIGITS.score)}）です。` +
+      `内積は向きの近さと長さの両方で決まるためです。`;
+
+  renderVectorPlane(ui.scorePlane,
+    buildTokenArrows(pass.keyVectors, 'k', 'plane-vector').concat([{
+      vector: queryVector,
+      color: TOKEN_COLORS[queryIndex],
+      label: `q_${token}`,
+      className: 'plane-vector is-query',
+    }]),
+    planeDescription);
+
   ui.scoreTableBody.innerHTML = '';
   SENTENCE_TOKENS.forEach((token, keyIndex) => {
     const masked = isMaskedCell(pass, queryIndex, keyIndex);
@@ -667,7 +854,7 @@ function renderResultReading(pass) {
 }
 
 /* ===========================================================================
- * 8. 描画 — 06: 4語ぶんまとめた行列
+ * 9. 描画 — 06: 4語ぶんまとめた行列
  * ========================================================================= */
 
 /** 4×4 の attention 行列。行が query 側の語、列が key 側の語。 */
@@ -756,7 +943,7 @@ function formatMixtureExpression(token, weights) {
 }
 
 /* ===========================================================================
- * 9. まとめて描き直す
+ * 10. まとめて描き直す
  * ========================================================================= */
 
 /** 状態から計算し直して全体を描き直す。入力は毎回作り直すが、量が小さいので問題にならない。 */
@@ -766,7 +953,7 @@ function renderAll() {
     useCausalMask: state.useCausalMask,
   });
 
-  renderParameterTables(pass);
+  renderProjectionSection(pass);
 
   ui.focusHeadline.textContent = `いま追っている語: "${SENTENCE_TOKENS[state.focusTokenIndex]}"`;
   renderTokenButtons();
@@ -783,7 +970,7 @@ function renderAll() {
 }
 
 /* ===========================================================================
- * 10. 起動
+ * 11. 起動
  * ========================================================================= */
 
 function bindUserInterface() {
