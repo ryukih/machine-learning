@@ -126,9 +126,9 @@
     <section class="card" id="s01">
       <h2><span class="section-badge">01</span>何を作りたいのか — <code>x</code> から <code>z</code> へ</h2>
       <p>
-        self-attention は、文の中の各語が<strong>同じ文の他のすべての語を見に行き</strong>、
-        自分にとって必要な情報だけを取り込んで、自分のベクトルを作り直す仕組みです。
-        入口と出口だけを書くと、やりたいことは1行で済みます。
+        self-attention は、文の中の各語（例: <code>playing</code>）が<strong>同じ文の他のすべての語を見に行き</strong>、
+        自分にとって必要な情報だけを取り込んで、自分のベクトル（<code>x_playing</code> → <code>z_playing</code>）を
+        作り直す仕組みです。入口と出口だけを書くと、やりたいことは1行で済みます。
       </p>
       <div class="formula-block">
         <code>x_playing  ← "playing" という語だけの情報を持つベクトル（周りを何も知らない）</code>
